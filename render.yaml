@@ -28,6 +28,13 @@ services:
       # (section 28.2). DEBUG et DB_ECHO restent interdits dans cet environnement.
       - key: ENVIRONMENT
         value: recette
+      # Une variable d'environnement l'emporte sur le fichier .env : ces deux
+      # lignes garantissent DEBUG/DB_ECHO désactivés même si un .env traîne
+      # dans le dépôt.
+      - key: DEBUG
+        value: "false"
+      - key: DB_ECHO
+        value: "false"
       - key: DATABASE_URL
         fromDatabase:
           name: mlexpert-db
