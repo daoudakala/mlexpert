@@ -45,14 +45,14 @@ CODES_PERMISSIONS = [
 
 db = SessionLocal()
 
-email = "test@example.com"
+email = "admin@mlexpert.com"
 mot_de_passe = "Test!2026"
 
 utilisateur = db.query(Utilisateur).filter_by(email=email).first()
 if utilisateur is None:
     utilisateur = Utilisateur(
         email=email, mot_de_passe_hash=hash_password(mot_de_passe),
-        nom="Test", prenom="Compte", actif=True,
+        nom="ML", prenom="EXPERT", actif=True,
     )
     db.add(utilisateur)
     db.flush()
