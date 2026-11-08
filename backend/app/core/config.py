@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # --- CORS --------------------------------------------------------------
     # En variable d'environnement : format JSON, ex. ["http://localhost:5173"]
     cors_origins: list[str] = ["http://localhost:5173"]
-
+    cookie_rafraichissement_path: str = "/auth"
     # --- Cookies d'authentification ------------------------------------------
     # Le frontend Vue reçoit les jetons uniquement via cookies `HttpOnly`
     # (jamais dans le corps de la réponse ni en `localStorage`) — voir
