@@ -1,0 +1,62 @@
+/*
+ * Jetons de couleur de MLexpert.
+ *
+ * C'EST LE SEUL FICHIER À REMPLACER pour appliquer une charte graphique
+ * existante : aucune classe Tailwind dans les composants ne contient de
+ * couleur en dur, elles référencent toutes ces variables (via
+ * tailwind.config.ts, qui les expose comme `bg-primary`, `text-surface`,
+ * etc.). Changer une valeur ici suffit à recolorer toute l'application.
+ */
+
+:root {
+  /* Couleur de marque */
+  --color-primary: #1e3a8a;
+  --color-primary-hover: #1e2f6b;
+  --color-primary-foreground: #ffffff;
+
+  /* Surfaces */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-border: #e5e7eb;
+
+  /* Texte */
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+
+  /* États métier (cohérents avec StatutBadge.vue) */
+  --color-success: #15803d;
+  --color-success-bg: #dcfce7;
+  --color-warning: #b45309;
+  --color-warning-bg: #fef3c7;
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fee2e2;
+  --color-info: #0369a1;
+  --color-info-bg: #e0f2fe;
+}
+
+/* Thème sombre : surchargé automatiquement si l'OS/le navigateur le demande.
+   Reste optionnel — à retirer si la charte graphique cible n'a pas de mode
+   sombre. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #3b5bdb;
+    --color-primary-hover: #5c7cfa;
+    --color-primary-foreground: #ffffff;
+
+    --color-surface: #0f172a;
+    --color-surface-muted: #1e293b;
+    --color-border: #334155;
+
+    --color-text: #f1f5f9;
+    --color-text-muted: #94a3b8;
+
+    --color-success: #4ade80;
+    --color-success-bg: #14532d;
+    --color-warning: #fbbf24;
+    --color-warning-bg: #78350f;
+    --color-danger: #f87171;
+    --color-danger-bg: #7f1d1d;
+    --color-info: #38bdf8;
+    --color-info-bg: #0c4a6e;
+  }
+}

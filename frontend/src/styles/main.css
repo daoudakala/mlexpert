@@ -1,0 +1,33 @@
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-surface-muted text-text antialiased;
+  }
+
+  /*
+   * Les champs de saisie du reste de l'application ne fixent que leur
+   * bordure (ex: "border border-border") sans fond explicite : ils
+   * héritaient donc du blanc par défaut du navigateur, alors que leur
+   * texte utilise `text-text`, une variable qui devient clair en thème
+   * sombre (voir tokens.css) — d'où du texte blanc sur fond blanc,
+   * invisible. En fixant ici le fond et la couleur de texte par défaut
+   * de tout champ natif, on corrige le problème partout en un seul
+   * endroit, sans repasser sur chaque formulaire des différents modules.
+   */
+  input,
+  select,
+  textarea {
+    background-color: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-text-muted);
+  }
+}

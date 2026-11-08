@@ -1,0 +1,48 @@
+# Blueprint Render pour MLexpert (environnement de recette / tests en ligne).
+# À placer à la RACINE du dépôt (à côté des dossiers backend/ et frontend/).
+# Le frontend n'est PAS déployé ici : il est hébergé sur Vercel.
+
+databases:
+  - name: mlexpert-db
+    databaseName: mlexpert
+    user: mlexpert
+    region: frankfurt   # la région la plus proche de la Côte d'Ivoire
+    plan: free          # le plan gratuit expire au bout d'un temps limité (voir notes)
+
+services:
+  - type: web
+    name: mlexpert-api
+    runtime: python
+    region: frankfurt
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # Pas de preDeployCommand : il n'est pas disponible sur le plan gratuit.
+    # Les migrations sont donc lancées au démarrage (idempotent : alembic ne
+    # rejoue rien si la base est déjà à jour).
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # "recette" = l'environnement de test prévu au cahier des charges
+      # (section 28.2). DEBUG et DB_ECHO restent interdits dans cet environnement.
+      - key: ENVIRONMENT
+        value: recette
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mlexpert-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true   # chaîne aléatoire, >= 32 caractères
+      # À renseigner à la main dans le dashboard Render, APRÈS avoir créé le
+      # projet Vercel. Format JSON, ex. : ["https://mlexpert.vercel.app"]
+      - key: CORS_ORIGINS
+        sync: false
+      # Le site est servi en HTTPS : le cookie du jeton de rafraîchissement
+      # doit être marqué Secure.
+      - key: COOKIE_SECURE
+        value: "true"
+      # Le navigateur voit l'API sous /api (proxy Vercel) : le cookie de
+      # rafraîchissement doit donc porter le chemin /api/auth, pas /auth.
+      - key: COOKIE_RAFRAICHISSEMENT_PATH
+        value: /api/auth
