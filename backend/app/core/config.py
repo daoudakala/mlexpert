@@ -7,7 +7,7 @@ Toutes les valeurs proviennent des variables d'environnement (ou du fichier
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -81,6 +81,15 @@ class Settings(BaseSettings):
         return self
 
 
+    @field_validator("database_url")
+    @classmethod
+    def normaliser_url_base(cls, valeur: str) -> str:
+        """Render fournit `postgres://` ou `postgresql://` : on force le pilote psycopg2."""
+        for debut in ("postgres://", "postgresql://", "postgresql+psycopg://"):
+            if valeur.startswith(debut):
+                return "postgresql+psycopg2://" + valeur[len(debut):]
+        return valeur
+    
 @lru_cache
 def get_settings() -> Settings:
     """Retourne l'instance unique de la configuration (mise en cache).
