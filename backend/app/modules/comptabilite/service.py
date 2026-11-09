@@ -1206,6 +1206,66 @@ class ServiceComptabilite:
         )
         return ecriture
 
+    def creer_ecriture_validee(
+        self,
+        *,
+        auteur_id: uuid.UUID,
+        journal_id: uuid.UUID,
+        date_ecriture: date,
+        libelle: str,
+        lignes: list[LigneSaisie],
+        exercice_id: uuid.UUID | None = None,
+        reference_piece: str | None = None,
+    ) -> Ecriture:
+        """Saisie manuelle « en une étape » : crée l'écriture ET la valide
+        immédiatement (plus d'étape brouillon pour l'utilisateur).
+
+        - `exercice_id` est facultatif : à défaut, l'exercice qui couvre
+          `date_ecriture` est retrouvé automatiquement (même règle que
+          l'import d'écritures).
+        - Une ligne sans libellé reprend celui de l'écriture, pour que le
+          libellé soit uniforme sur toutes les lignes.
+        - Le numéro de pièce est attribué par le logiciel (numéro
+          séquentiel de la validation) ; il remplace `reference_piece`
+          seulement si l'utilisateur n'en a pas fourni.
+
+        Réservé à la saisie manuelle : l'import, les modèles, les
+        récurrentes et la duplication continuent d'utiliser `creer_ecriture`
+        (brouillon) — leur comportement ne change pas."""
+        if exercice_id is None:
+            exercice = self.exercices.obtenir_pour_date(date_ecriture)
+            if exercice is None:
+                raise ValidationMetier(
+                    f"Aucun exercice ne couvre la date {date_ecriture.isoformat()}."
+                )
+            exercice_id = exercice.id
+
+        lignes_uniformes = [
+            LigneSaisie(
+                compte_id=ligne.compte_id,
+                debit=ligne.debit,
+                credit=ligne.credit,
+                tiers_id=ligne.tiers_id,
+                libelle=ligne.libelle or libelle,
+                date_echeance=ligne.date_echeance,
+            )
+            for ligne in lignes
+        ]
+        ecriture = self.creer_ecriture(
+            auteur_id=auteur_id,
+            journal_id=journal_id,
+            exercice_id=exercice_id,
+            date_ecriture=date_ecriture,
+            libelle=libelle,
+            lignes=lignes_uniformes,
+            reference_piece=reference_piece,
+        )
+        ecriture = self.valider_ecriture(ecriture.id, auteur_id=auteur_id)
+        if not ecriture.reference_piece:
+            ecriture.reference_piece = ecriture.numero
+            self.db.flush()
+        return ecriture
+
     def modifier_ecriture(
         self,
         ecriture_id: uuid.UUID,

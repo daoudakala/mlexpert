@@ -611,10 +611,14 @@ def creer_ecriture(
     entreprise_id: uuid.UUID,
     donnees: EcritureCreation,
     contexte: ContexteEntreprise = Depends(exiger_permission("ecriture.creer")),
+    _autorisation_validation: ContexteEntreprise = Depends(exiger_permission("ecriture.valider")),
     db: Session = Depends(get_db),
 ) -> EcritureAvecLignes:
+    """Saisie manuelle : l'écriture est créée ET validée en une seule étape
+    (voir `ServiceComptabilite.creer_ecriture_validee`) — d'où les deux
+    permissions requises : `ecriture.creer` et `ecriture.valider`."""
     service = ServiceComptabilite(db, contexte.entreprise_id)
-    ecriture = service.creer_ecriture(
+    ecriture = service.creer_ecriture_validee(
         auteur_id=contexte.utilisateur_id,
         journal_id=donnees.journal_id,
         exercice_id=donnees.exercice_id,

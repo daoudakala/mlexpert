@@ -291,7 +291,9 @@ class DelettrageDemande(BaseModel):
 
 class EcritureCreation(BaseModel):
     journal_id: uuid.UUID
-    exercice_id: uuid.UUID
+    # Facultatif : à défaut, l'exercice qui couvre `date_ecriture` est
+    # retrouvé automatiquement par le service.
+    exercice_id: uuid.UUID | None = None
     date_ecriture: date
     libelle: str = Field(min_length=2, max_length=255)
     reference_piece: str | None = Field(default=None, max_length=100)

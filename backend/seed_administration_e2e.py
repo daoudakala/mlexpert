@@ -28,8 +28,8 @@ suffixe = uuid.uuid4().hex[:6]
 
 # --- Administrateur plateforme ----------------------------------------------
 
-email_admin = f"admin.e2e.{suffixe}@example.com"
-mot_de_passe_admin = "MotDePasseAdminE2E!2026"
+email_admin = f"admin.{suffixe}@mlexpert.com"
+mot_de_passe_admin = "AdminE2E!2026"
 
 administrateur = Utilisateur(
     email=email_admin, mot_de_passe_hash=hash_password(mot_de_passe_admin),
@@ -53,8 +53,8 @@ db.flush()
 
 # --- Entreprise + collaborateur (droits.*, exercice.*, periode.*) ----------
 
-email_collab = f"collab.administration.e2e.{suffixe}@example.com"
-mot_de_passe_collab = "MotDePasseCollabE2E!2026"
+email_collab = f"collab.administration.{suffixe}@mlexpert.com"
+mot_de_passe_collab = "CollabE2E!2026"
 
 collaborateur = Utilisateur(
     email=email_collab, mot_de_passe_hash=hash_password(mot_de_passe_collab),

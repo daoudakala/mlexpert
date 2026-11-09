@@ -3,7 +3,10 @@
  * Sert à la création, à l'édition d'un brouillon et à la consultation
  * d'une écriture validée (route unique .../ecritures/nouvelle ou
  * .../ecritures/:id) :
- *   - nouvelle écriture : formulaire vide, lignes modifiables.
+ *   - nouvelle écriture : formulaire vide, lignes modifiables. À
+ *     l'enregistrement, l'écriture est validée immédiatement (numéro de
+ *     pièce généré par le logiciel) et le formulaire se vide pour enchaîner
+ *     sur une nouvelle écriture, sans quitter l'écran.
  *   - brouillon existant : mêmes champs, pré-remplis, modifiables
  *     (modifier_ecriture), avec bouton Valider et Supprimer.
  *   - écriture validée : champs en lecture seule (le backend refuse toute
@@ -27,6 +30,7 @@ import {
 } from "@/modules/documents/api";
 import { CATEGORIES_DOCUMENT, type CategorieDocument } from "@/modules/documents/types";
 import BaseFormulaire from "@/core/ui/BaseFormulaire.vue";
+import CompteSelect from "./CompteSelect.vue";
 import ConfirmDialog from "@/core/ui/ConfirmDialog.vue";
 import { formaterMontant } from "@/core/ui/formatage";
 import MontantInput from "@/core/ui/MontantInput.vue";
@@ -46,7 +50,10 @@ const lectureSeule = computed(() => enEdition.value && estValidee.value);
 
 const { data: journaux } = useJournaux(entrepriseId);
 const { data: exercices } = useExercices(entrepriseId);
-const { data: comptes } = useComptesEntreprise(entrepriseId);
+// Plan comptable complet (jusqu'à 5000 comptes, au lieu des 1000 par défaut
+// qui coupaient les classes élevées) — une seule requête, partagée par les
+// sélecteurs de compte de toutes les lignes.
+const { data: comptes } = useComptesEntreprise(entrepriseId, computed(() => ({ limite: 5000 })));
 const { data: tiersListe } = useListeTiers(entrepriseId, computed(() => ({ actifsSeulement: true })));
 const { data: extournantes } = useExournantes(entrepriseId, ecritureId);
 
@@ -101,8 +108,42 @@ const totalCredit = computed(() =>
 );
 const equilibree = computed(() => Math.abs(totalDebit.value - totalCredit.value) < 0.005);
 
+// --- Contrepartie automatique ------------------------------------------------
+// Pour une NOUVELLE écriture, la dernière ligne équilibre automatiquement les
+// autres (sens et montant). Dès que l'utilisateur la modifie lui-même, la
+// contrepartie automatique s'arrête ; ajouter une ligne la relance sur la
+// nouvelle dernière ligne. On repère la modification manuelle en comparant
+// la ligne aux dernières valeurs calculées (aucun événement du composant de
+// montant n'est nécessaire).
+const contrepartieAuto = ref(true);
+let derniereValeurAuto: { sens: "debit" | "credit"; montant: number } | null = null;
+
+function recalculerContrepartie(): void {
+  if (enEdition.value || !contrepartieAuto.value || formulaire.lignes.length < 2) return;
+  const derniere = formulaire.lignes[formulaire.lignes.length - 1];
+  if (
+    derniereValeurAuto &&
+    (derniere.sens !== derniereValeurAuto.sens || derniere.montant !== derniereValeurAuto.montant)
+  ) {
+    contrepartieAuto.value = false;
+    return;
+  }
+  const net = formulaire.lignes
+    .slice(0, -1)
+    .reduce((s, l) => s + (l.sens === "debit" ? l.montant : -l.montant), 0);
+  const sens: "debit" | "credit" = net > 0 ? "credit" : net < 0 ? "debit" : derniere.sens;
+  const montant = Math.round(Math.abs(net) * 100) / 100;
+  if (derniere.sens !== sens) derniere.sens = sens;
+  if (derniere.montant !== montant) derniere.montant = montant;
+  derniereValeurAuto = { sens: derniere.sens, montant: derniere.montant };
+}
+
+watch(() => formulaire.lignes, recalculerContrepartie, { deep: true });
+
 function ajouterLigne(): void {
   formulaire.lignes.push(ligneVide());
+  contrepartieAuto.value = true;
+  derniereValeurAuto = null;
 }
 function retirerLigne(index: number): void {
   formulaire.lignes.splice(index, 1);
@@ -114,15 +155,33 @@ function lignesSaisies() {
     debit: l.sens === "debit" ? l.montant : 0,
     credit: l.sens === "credit" ? l.montant : 0,
     tiers_id: l.tiers_id || null,
-    libelle: l.libelle || null,
+    // Libellé uniforme : toutes les lignes portent celui de l'écriture.
+    libelle: formulaire.libelle,
   }));
 }
 
 const erreur = ref<string | null>(null);
+// Dernière écriture enregistrée depuis ce formulaire (bandeau de confirmation).
+const derniereEcriture = ref<{ id: string; numero: string | null } | null>(null);
+
+function reinitialiserSaisie(): void {
+  // On garde le journal et la date : on enchaîne souvent plusieurs
+  // écritures du même jour dans le même journal.
+  formulaire.libelle = "";
+  formulaire.reference_piece = "";
+  formulaire.lignes = [ligneVide(), ligneVide()];
+  contrepartieAuto.value = true;
+  derniereValeurAuto = null;
+}
+
 const enEnvoi = computed(() => creer.isPending.value || modifier.isPending.value);
 
 async function soumettre(): Promise<void> {
   erreur.value = null;
+  if (formulaire.lignes.some((l) => !l.compte_id)) {
+    erreur.value = "Choisis un compte pour chaque ligne.";
+    return;
+  }
   if (!equilibree.value) {
     erreur.value = `L'écriture n'est pas équilibrée : débit ${totalDebit.value} ≠ crédit ${totalCredit.value}.`;
     return;
@@ -142,13 +201,14 @@ async function soumettre(): Promise<void> {
     } else {
       const ecriture = await creer.mutateAsync({
         journal_id: formulaire.journal_id,
-        exercice_id: formulaire.exercice_id,
         date_ecriture: formulaire.date_ecriture,
         libelle: formulaire.libelle,
-        reference_piece: formulaire.reference_piece || null,
+        // Numéro de pièce : généré par le logiciel à la validation.
+        reference_piece: null,
         lignes: lignesSaisies(),
       });
-      router.push({ name: "comptabilite.ecriture", params: { id: ecriture.id } });
+      derniereEcriture.value = { id: ecriture.id, numero: ecriture.numero };
+      reinitialiserSaisie();
     }
   } catch (e) {
     erreur.value = messageErreur(e);
@@ -343,12 +403,28 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
       </form>
     </div>
 
+    <div
+      v-if="derniereEcriture && !enEdition"
+      class="flex items-center justify-between rounded-lg border border-success bg-success/10 px-4 py-3 text-sm text-text"
+    >
+      <span>
+        Écriture enregistrée et validée — numéro de pièce
+        <strong>{{ derniereEcriture.numero ?? "—" }}</strong>. Le formulaire est prêt pour une nouvelle écriture.
+      </span>
+      <router-link
+        :to="{ name: 'comptabilite.ecriture', params: { id: derniereEcriture.id } }"
+        class="text-primary hover:underline"
+      >
+        Voir l'écriture
+      </router-link>
+    </div>
+
     <BaseFormulaire
       v-if="!lectureSeule"
       titre="Informations"
       :erreur="erreur"
       :en-envoi="enEnvoi"
-      :libelle-enregistrer="enEdition ? 'Enregistrer les modifications' : 'Créer en brouillon'"
+      :libelle-enregistrer="enEdition ? 'Enregistrer les modifications' : 'Enregistrer'"
       @soumettre="soumettre"
       @annuler="router.push({ name: 'comptabilite.ecritures' })"
     >
@@ -362,28 +438,26 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
             </select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium text-text">Exercice</label>
-            <select v-model="formulaire.exercice_id" required :disabled="enEdition" class="w-full rounded-md border border-border px-3 py-2 text-text disabled:opacity-60">
-              <option value="" disabled>— Choisir —</option>
-              <option v-for="e in exercices" :key="e.id" :value="e.id">{{ e.date_debut }} → {{ e.date_fin }}</option>
-            </select>
+            <label class="mb-1 block text-sm font-medium text-text">Date</label>
+            <input v-model="formulaire.date_ecriture" type="date" required class="w-full rounded-md border border-border px-3 py-2 text-text" />
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="mb-1 block text-sm font-medium text-text">Date</label>
-            <input v-model="formulaire.date_ecriture" type="date" required class="w-full rounded-md border border-border px-3 py-2 text-text" />
+            <label class="mb-1 block text-sm font-medium text-text">Numéro de pièce</label>
+            <input
+              v-if="!enEdition"
+              value="Généré automatiquement à l'enregistrement"
+              disabled
+              class="w-full rounded-md border border-border px-3 py-2 text-text-muted disabled:opacity-70"
+            />
+            <input v-else v-model="formulaire.reference_piece" class="w-full rounded-md border border-border px-3 py-2 text-text" />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium text-text">Référence pièce</label>
-            <input v-model="formulaire.reference_piece" class="w-full rounded-md border border-border px-3 py-2 text-text" />
+            <label class="mb-1 block text-sm font-medium text-text">Libellé</label>
+            <input v-model="formulaire.libelle" required minlength="2" class="w-full rounded-md border border-border px-3 py-2 text-text" />
           </div>
-        </div>
-
-        <div>
-          <label class="mb-1 block text-sm font-medium text-text">Libellé</label>
-          <input v-model="formulaire.libelle" required minlength="2" class="w-full rounded-md border border-border px-3 py-2 text-text" />
         </div>
 
         <div class="space-y-3">
@@ -395,16 +469,9 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
           </div>
 
           <div v-for="(ligne, index) in formulaire.lignes" :key="index" class="grid grid-cols-12 items-end gap-2 rounded-md border border-border p-3">
-            <div class="col-span-3">
+            <div class="col-span-4">
               <label class="mb-1 block text-xs font-medium text-text-muted">Compte</label>
-              <select v-model="ligne.compte_id" required class="w-full rounded-md border border-border px-2 py-1.5 text-sm text-text">
-                <option value="" disabled>— Choisir —</option>
-                <option v-for="c in comptes" :key="c.id" :value="c.id">{{ c.numero }} — {{ c.libelle }}</option>
-              </select>
-            </div>
-            <div class="col-span-3">
-              <label class="mb-1 block text-xs font-medium text-text-muted">Libellé</label>
-              <input v-model="ligne.libelle" class="w-full rounded-md border border-border px-2 py-1.5 text-sm text-text" />
+              <CompteSelect v-model="ligne.compte_id" :comptes="comptes" required />
             </div>
             <div class="col-span-2">
               <label class="mb-1 block text-xs font-medium text-text-muted">Tiers (optionnel)</label>
@@ -413,14 +480,14 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
                 <option v-for="t in tiersListe" :key="t.id" :value="t.id">{{ t.code }}</option>
               </select>
             </div>
-            <div class="col-span-1">
+            <div class="col-span-2">
               <label class="mb-1 block text-xs font-medium text-text-muted">Sens</label>
               <select v-model="ligne.sens" class="w-full rounded-md border border-border px-2 py-1.5 text-sm text-text">
                 <option value="debit">Débit</option>
                 <option value="credit">Crédit</option>
               </select>
             </div>
-            <div class="col-span-2">
+            <div class="col-span-3">
               <label class="mb-1 block text-xs font-medium text-text-muted">Montant</label>
               <MontantInput v-model="ligne.montant" required />
             </div>
@@ -448,7 +515,7 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
     <div v-else class="space-y-4 rounded-lg border border-border bg-surface p-6 text-sm">
       <div class="grid grid-cols-2 gap-4">
         <div><p class="text-text-muted">Date</p><p class="text-text">{{ formulaire.date_ecriture }}</p></div>
-        <div><p class="text-text-muted">Référence pièce</p><p class="text-text">{{ formulaire.reference_piece || "—" }}</p></div>
+        <div><p class="text-text-muted">Numéro de pièce</p><p class="text-text">{{ ecritureExistante?.numero ?? formulaire.reference_piece ?? "—" }}</p></div>
       </div>
       <div><p class="text-text-muted">Libellé</p><p class="text-text">{{ formulaire.libelle }}</p></div>
       <div class="overflow-hidden rounded-lg border border-border">

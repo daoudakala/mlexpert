@@ -82,7 +82,8 @@ export type StatutEcriture = "brouillon" | "validee";
 
 export interface EcritureCreation {
   journal_id: string;
-  exercice_id: string;
+  // Facultatif : le backend retrouve l'exercice à partir de la date.
+  exercice_id?: string | null;
   date_ecriture: string;
   libelle: string;
   reference_piece?: string | null;
