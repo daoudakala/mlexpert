@@ -1785,3 +1785,4 @@ class ServiceComptabilite:
         if tiers is None or tiers.delai_paiement_jours is None:
             return None
         return date_ecriture + timedelta(days=tiers.delai_paiement_jours)
+    #Nouvelle modification

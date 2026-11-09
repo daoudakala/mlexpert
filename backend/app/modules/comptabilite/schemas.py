@@ -392,3 +392,5 @@ class EcheanceIgnoreeLecture(BaseModel):
 class GenerationEcheancesResultat(BaseModel):
     ecritures_creees: list[EcritureLecture]
     ignorees: list[EcheanceIgnoreeLecture]
+
+    #Nouvelle modification

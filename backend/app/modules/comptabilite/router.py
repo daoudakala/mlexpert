@@ -898,3 +898,4 @@ def annuler_lettrage(
     service = ServiceComptabilite(db, contexte.entreprise_id)
     service.delettrer(donnees.code_lettrage, auteur_id=contexte.utilisateur_id)
     db.commit()
+    #Nouvelle modification
