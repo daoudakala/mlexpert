@@ -49,6 +49,7 @@ const estValidee = computed(() => ecritureExistante.value?.statut === "validee")
 const lectureSeule = computed(() => enEdition.value && estValidee.value);
 
 const { data: journaux } = useJournaux(entrepriseId);
+
 const { data: exercices } = useExercices(entrepriseId);
 // Plan comptable complet (jusqu'à 5000 comptes, au lieu des 1000 par défaut
 // qui coupaient les classes élevées) — une seule requête, partagée par les
@@ -79,6 +80,18 @@ const formulaire = reactive({
   reference_piece: "",
   lignes: [ligneVide(), ligneVide()] as LigneFormulaire[],
 });
+
+// Venant d'un journal du menu latéral (?journal=BQ) : journal présélectionné.
+watch(
+  journaux,
+  (liste) => {
+    const code = route.query.journal;
+    if (!liste || typeof code !== "string" || formulaire.journal_id) return;
+    const trouve = liste.find((j) => j.code === code);
+    if (trouve) formulaire.journal_id = trouve.id;
+  },
+  { immediate: true },
+);
 
 watch(
   ecritureExistante,

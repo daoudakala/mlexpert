@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { useAuth } from "@/core/auth/useAuth";
 import BaseDataTable, { type ColonneTable } from "@/core/ui/BaseDataTable.vue";
@@ -12,7 +12,18 @@ const router = useRouter();
 const { contexteActif, aPermission } = useAuth();
 const entrepriseId = computed(() => contexteActif.value?.entreprise.id);
 
+const route = useRoute();
 const filtres = ref<FiltresTiers>({ actifsSeulement: true });
+
+// Le menu latéral ouvre cette page avec ?role=client ou ?role=fournisseur.
+watch(
+  () => route.query.role,
+  (role) => {
+    filtres.value.clientSeulement = role === "client";
+    filtres.value.fournisseurSeulement = role === "fournisseur";
+  },
+  { immediate: true },
+);
 const { data: tiers, isLoading } = useListeTiers(entrepriseId, filtres);
 
 const colonnes: ColonneTable<Tiers>[] = [

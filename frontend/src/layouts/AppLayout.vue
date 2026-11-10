@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { useRouter } from "vue-router";
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { useAuth } from "@/core/auth/useAuth";
-import IconeNav from "@/core/ui/IconeNav.vue";
+import MenuLateral from "@/core/ui/MenuLateral.vue";
 import NotificationCloche from "@/modules/notifications/NotificationCloche.vue";
-import logoMLexpert from "@/assets/logo-mlexpert.png";
 
 const {
   utilisateur,
@@ -16,6 +16,28 @@ const {
   deconnecter,
 } = useAuth();
 const router = useRouter();
+const route = useRoute();
+
+// Tiroir du menu (petits écrans uniquement : sur grand écran le menu est fixe).
+const menuOuvert = ref(false);
+watch(
+  () => route.fullPath,
+  () => {
+    menuOuvert.value = false;
+  },
+);
+
+const initiales = computed(() => {
+  const u = utilisateur.value;
+  if (!u) return "?";
+  return `${u.prenom?.[0] ?? ""}${u.nom?.[0] ?? ""}`.toUpperCase() || "?";
+});
+
+const sousTitreUtilisateur = computed(() =>
+  estAdministrateurPlateforme.value
+    ? "Admin plateforme"
+    : (contexteActif.value?.entreprise.raison_sociale ?? ""),
+);
 
 function surChangementEntreprise(evenement: Event): void {
   const id = (evenement.target as HTMLSelectElement).value;
@@ -33,283 +55,108 @@ async function surDeconnexion(): Promise<void> {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col">
-    <header class="flex items-center justify-between border-b border-border bg-surface px-6 py-3">
-      <div class="flex items-center gap-4">
-        <img :src="logoMLexpert" alt="MLexpert" class="h-8 w-auto" />
+  <div class="min-h-screen">
+    <!-- Voile derrière le tiroir (petits écrans) -->
+    <div
+      v-if="menuOuvert"
+      class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+      aria-hidden="true"
+      @click="menuOuvert = false"
+    />
 
-        <select
-          v-if="contextes.length > 0"
-          :value="contexteActif?.entreprise.id"
-          class="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
-          @change="surChangementEntreprise"
+    <!-- Menu latéral : fixe sur grand écran, tiroir sinon -->
+    <aside
+      class="fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-[var(--color-sidebar)] transition-transform duration-200 lg:translate-x-0"
+      :class="menuOuvert ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <div class="flex items-center justify-between border-b border-[var(--color-sidebar-line)] px-5 py-4">
+        <div class="flex items-center gap-3">
+          <div
+            class="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-sidebar-active)] text-sm font-bold text-white"
+          >
+            ML
+          </div>
+          <div class="leading-tight">
+            <p class="text-base font-semibold text-white">MLexpert</p>
+            <p class="text-xs text-[var(--color-sidebar-text-muted)]">Comptabilité</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="rounded-md p-1 text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover)] hover:text-white lg:hidden"
+          aria-label="Fermer le menu"
+          @click="menuOuvert = false"
         >
-          <option v-for="c in contextes" :key="c.entreprise.id" :value="c.entreprise.id">
-            {{ c.entreprise.raison_sociale }}
-          </option>
-        </select>
-      </div>
-
-      <div class="flex items-center gap-3 text-sm text-text-muted">
-        <NotificationCloche v-if="aPermission('notification.consulter')" />
-        <span v-if="utilisateur">{{ utilisateur.prenom }} {{ utilisateur.nom }}</span>
-        <button type="button" class="text-primary hover:underline" @click="surDeconnexion">
-          Déconnexion
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="h-5 w-5">
+            <path d="M5 5l10 10M15 5 5 15" />
+          </svg>
         </button>
       </div>
-    </header>
 
-    <div class="flex flex-1">
-      <!-- Le menu latéral se construira module par module, piloté par
-           contexteActif?.codes_permissions (cf. router/index.ts). -->
-      <nav class="w-56 border-r border-border bg-surface p-4">
-        <router-link
-          :to="{ name: 'accueil' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="accueil" />
-          Tableau de bord
-        </router-link>
-        <router-link
-          v-if="aPermission('tiers.consulter')"
-          :to="{ name: 'tiers.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="tiers" />
-          Tiers
-        </router-link>
-        <router-link
-          v-if="aPermission('compte_bancaire.consulter')"
-          :to="{ name: 'tresorerie.comptes-bancaires' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="tresorerie" />
-          Trésorerie
-        </router-link>
-        <router-link
-          v-if="aPermission('compte.consulter')"
-          :to="{ name: 'comptabilite.comptes' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="plan-comptable" />
-          Plan comptable
-        </router-link>
-        <router-link
-          v-if="aPermission('journal.consulter')"
-          :to="{ name: 'comptabilite.journaux' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="journaux" />
-          Journaux
-        </router-link>
-        <router-link
-          v-if="aPermission('ecriture.consulter')"
-          :to="{ name: 'comptabilite.ecritures' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="ecritures" />
-          Écritures
-        </router-link>
-        <router-link
-          v-if="aPermission('modele_ecriture.consulter')"
-          :to="{ name: 'comptabilite.modeles-ecriture' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="modeles-ecriture" />
-          Modèles d'écriture
-        </router-link>
-        <router-link
-          v-if="aPermission('ecriture.consulter')"
-          :to="{ name: 'comptabilite.lettrage' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="lettrage" />
-          Lettrage
-        </router-link>
-        <router-link
-          v-if="aPermission('ecriture_recurrente.consulter')"
-          :to="{ name: 'comptabilite.ecritures-recurrentes' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="ecritures-recurrentes" />
-          Écritures récurrentes
-        </router-link>
-        <router-link
-          v-if="aPermission('immobilisation.consulter')"
-          :to="{ name: 'immobilisations.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="immobilisations" />
-          Immobilisations
-        </router-link>
-        <router-link
-          v-if="aPermission('provision.consulter')"
-          :to="{ name: 'provisions.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="provisions" />
-          Provisions
-        </router-link>
-        <router-link
-          v-if="aPermission('regularisation.consulter')"
-          :to="{ name: 'regularisations.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="regularisations" />
-          Régularisations (CCA/PCA)
-        </router-link>
-        <router-link
-          v-if="aPermission('document.consulter')"
-          :to="{ name: 'documents.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="documents" />
-          Documents
-        </router-link>
-        <router-link
-          v-if="aPermission('interlocuteur.consulter')"
-          :to="{ name: 'interlocuteurs.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="interlocuteurs" />
-          Interlocuteurs
-        </router-link>
-        <router-link
-          v-if="aPermission('article.consulter')"
-          :to="{ name: 'stocks.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="stocks" />
-          Stocks
-        </router-link>
-        <router-link
-          v-if="aPermission('portail_client.consulter')"
-          :to="{ name: 'portail_client.demandes' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="portail-client" />
-          Demandes clients
-        </router-link>
-        <router-link
-          v-if="aPermission('journal_activite.consulter')"
-          :to="{ name: 'journal_activite.page' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="journal-activite" />
-          Journal d'activité
-        </router-link>
-        <router-link
-          v-if="aPermission('exercice.consulter')"
-          :to="{ name: 'exercices.liste' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="exercices" />
-          Exercices
-        </router-link>
-        <router-link
-          v-if="aPermission('droits.consulter')"
-          :to="{ name: 'droits.affectations' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="affectations" />
-          Affectations
-        </router-link>
-        <router-link
-          v-if="aPermission('employe.consulter')"
-          :to="{ name: 'paie.employes' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="employes" />
-          Employés
-        </router-link>
-        <router-link
-          v-if="aPermission('rubrique_paie.consulter')"
-          :to="{ name: 'paie.rubriques' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="rubriques-paie" />
-          Rubriques de paie
-        </router-link>
-        <router-link
-          v-if="aPermission('bulletin.consulter')"
-          :to="{ name: 'paie.bulletins' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="bulletins-paie" />
-          Bulletins de paie
-        </router-link>
+      <MenuLateral @navigation="menuOuvert = false" />
 
-        <div class="my-3 border-t border-border" />
-        <router-link
-          :to="{ name: 'utilisateurs.mon-profil' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="mon-profil" />
-          Mon profil
-        </router-link>
-        <router-link
-          v-if="aPermission('notification.consulter')"
-          :to="{ name: 'notifications.preferences' }"
-          class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-          active-class="bg-surface-muted font-medium"
-        >
-          <IconeNav nom="notifications" />
-          Préférences de notification
-        </router-link>
-
-        <template v-if="estAdministrateurPlateforme">
-          <p class="mt-3 px-3 text-xs font-semibold uppercase text-text-muted">Administration</p>
-          <router-link
-            :to="{ name: 'entreprises.liste' }"
-            class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-            active-class="bg-surface-muted font-medium"
+      <!-- Carte utilisateur -->
+      <div class="border-t border-[var(--color-sidebar-line)] p-3">
+        <div class="flex items-center gap-3 rounded-lg px-2 py-2">
+          <div
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--color-sidebar-active)] text-xs font-semibold text-white"
           >
-            <IconeNav nom="entreprises" />
-            Entreprises
-          </router-link>
-          <router-link
-            :to="{ name: 'utilisateurs.liste' }"
-            class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-            active-class="bg-surface-muted font-medium"
+            {{ initiales }}
+          </div>
+          <div class="min-w-0 flex-1 leading-tight">
+            <p class="truncate text-sm font-medium text-white">
+              {{ utilisateur ? `${utilisateur.prenom} ${utilisateur.nom}` : "" }}
+            </p>
+            <p class="truncate text-xs text-[var(--color-sidebar-text-muted)]">{{ sousTitreUtilisateur }}</p>
+          </div>
+          <button
+            type="button"
+            class="rounded-md p-1.5 text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover)] hover:text-white"
+            title="Déconnexion"
+            aria-label="Déconnexion"
+            @click="surDeconnexion"
           >
-            <IconeNav nom="utilisateurs-admin" />
-            Utilisateurs
-          </router-link>
-          <router-link
-            :to="{ name: 'droits.roles' }"
-            class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text hover:bg-surface-muted"
-            active-class="bg-surface-muted font-medium"
-          >
-            <IconeNav nom="roles-admin" />
-            Rôles &amp; permissions
-          </router-link>
-        </template>
-      </nav>
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+              <path d="M8 3.5H5a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 5 16.5h3" />
+              <path d="M12.5 6.5 16 10l-3.5 3.5" />
+              <line x1="16" y1="10" x2="7.5" y2="10" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
 
-      <main class="flex-1 p-6">
+    <!-- Contenu -->
+    <div class="flex min-h-screen flex-col lg:pl-64">
+      <header class="flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 sm:px-6">
+        <div class="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            class="rounded-md border border-border p-2 text-text hover:bg-surface-muted lg:hidden"
+            aria-label="Ouvrir le menu"
+            @click="menuOuvert = true"
+          >
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="h-5 w-5">
+              <path d="M3.5 6h13M3.5 10h13M3.5 14h13" />
+            </svg>
+          </button>
+
+          <select
+            v-if="contextes.length > 0"
+            :value="contexteActif?.entreprise.id"
+            class="max-w-[14rem] truncate rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text sm:max-w-xs"
+            @change="surChangementEntreprise"
+          >
+            <option v-for="c in contextes" :key="c.entreprise.id" :value="c.entreprise.id">
+              {{ c.entreprise.raison_sociale }}
+            </option>
+          </select>
+        </div>
+
+        <NotificationCloche v-if="aPermission('notification.consulter')" />
+      </header>
+
+      <main class="flex-1 p-4 sm:p-6">
         <router-view />
       </main>
     </div>

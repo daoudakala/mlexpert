@@ -7,6 +7,7 @@
  * de création/modification ici.
  */
 import { computed, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import { useAuth } from "@/core/auth/useAuth";
 import BaseDataTable, { type ColonneTable } from "@/core/ui/BaseDataTable.vue";
@@ -63,7 +64,25 @@ type Onglet =
   | "balance-agee"
   | "prevision-tresorerie"
   | "pilotage";
-const ongletActif = ref<Onglet>("balance");
+const ONGLETS_VALIDES: Onglet[] = [
+  "balance", "comparaison", "resultat", "resultat-detaille", "bilan", "grand-livre",
+  "echeancier", "balance-agee", "prevision-tresorerie", "pilotage",
+];
+// Le menu latéral pointe vers cette page avec ?onglet=...&type=client|fournisseur.
+const route = useRoute();
+function ongletDepuisRoute(): Onglet {
+  const valeur = route.query.onglet;
+  return typeof valeur === "string" && (ONGLETS_VALIDES as string[]).includes(valeur)
+    ? (valeur as Onglet)
+    : "balance";
+}
+const ongletActif = ref<Onglet>(ongletDepuisRoute());
+watch(
+  () => route.query.onglet,
+  () => {
+    ongletActif.value = ongletDepuisRoute();
+  },
+);
 
 // Pilotage Direction/Comptabilité (Étape 5) : PAS scopé à l'exercice
 // sélectionné dans le menu déroulant ci-dessus, chaque tableau détermine
@@ -93,7 +112,15 @@ const LIBELLES_TYPES_ALERTE: Record<string, string> = {
 // facture impayée reste ouverte au-delà de la clôture de l'exercice qui
 // l'a vue naître, voir la note de tête de service.py côté backend) — un
 // seul sélecteur client/fournisseur, partagé par les deux onglets.
-const typeTiersEcheancier = ref<TypeTiersEcheancier>("client");
+const typeTiersEcheancier = ref<TypeTiersEcheancier>(
+  route.query.type === "fournisseur" ? "fournisseur" : "client",
+);
+watch(
+  () => route.query.type,
+  (valeur) => {
+    if (valeur === "client" || valeur === "fournisseur") typeTiersEcheancier.value = valeur;
+  },
+);
 const { data: echeancier, isLoading: chargementEcheancier } = useEcheancier(entrepriseId, typeTiersEcheancier);
 const { data: balanceAgee, isLoading: chargementBalanceAgee } = useBalanceAgee(entrepriseId, typeTiersEcheancier);
 

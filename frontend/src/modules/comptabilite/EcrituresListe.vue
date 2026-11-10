@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { useAuth } from "@/core/auth/useAuth";
 import BaseDataTable, { type ColonneTable } from "@/core/ui/BaseDataTable.vue";
@@ -11,6 +11,7 @@ import { useExercices } from "@/modules/exercices/api";
 import type { EcritureImportResultat, EcritureLecture } from "./types";
 
 const router = useRouter();
+const route = useRoute();
 const { contexteActif, aPermission } = useAuth();
 const entrepriseId = computed(() => contexteActif.value?.entreprise.id);
 
@@ -20,6 +21,21 @@ const { data: exercices } = useExercices(entrepriseId);
 const filtres = reactive<FiltresEcritures>({ journalId: null, exerciceId: null, statut: null });
 const { data: ecritures, isLoading } = useListeEcritures(entrepriseId, computed(() => filtres));
 const { importer } = useMutationsEcritures(entrepriseId);
+
+// Le menu latéral filtre par journal via ?journal=<code> (ex. BQ, VT).
+const codeJournalDemande = computed(() =>
+  typeof route.query.journal === "string" ? route.query.journal : null,
+);
+const journalDemande = computed(
+  () => journaux.value?.find((j) => j.code === codeJournalDemande.value) ?? null,
+);
+watch(
+  [codeJournalDemande, journalDemande],
+  () => {
+    filtres.journalId = codeJournalDemande.value ? (journalDemande.value?.id ?? null) : null;
+  },
+  { immediate: true },
+);
 
 // --- Import d'écritures (CSV/Excel) -----------------------------------------
 
@@ -72,7 +88,7 @@ function ouvrir(ligne: EcritureLecture): void {
         </button>
         <router-link
           v-if="aPermission('ecriture.creer')"
-          :to="{ name: 'comptabilite.ecriture.nouvelle' }"
+          :to="{ name: 'comptabilite.ecriture.nouvelle', query: codeJournalDemande ? { journal: codeJournalDemande } : {} }"
           class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
         >
           Nouvelle écriture

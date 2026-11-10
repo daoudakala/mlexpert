@@ -32,6 +32,15 @@
   --color-danger-bg: #fee2e2;
   --color-info: #0369a1;
   --color-info-bg: #e0f2fe;
+
+  /* Menu latéral (identique en thème clair et sombre : toujours marine) */
+  --color-sidebar: #000a5c;
+  --color-sidebar-hover: rgba(255, 255, 255, 0.07);
+  --color-sidebar-active: #2d3cff;
+  --color-sidebar-text: #ffffff;
+  --color-sidebar-text-muted: #b8bee0;
+  --color-sidebar-title: #7b86c9;
+  --color-sidebar-line: rgba(255, 255, 255, 0.1);
 }
 
 /* Thème sombre : surchargé automatiquement si l'OS/le navigateur le demande.

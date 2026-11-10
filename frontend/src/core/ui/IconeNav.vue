@@ -190,5 +190,42 @@ defineProps<{ nom: string }>();
       <path d="M10 2.5 16 4.7v4.8c0 4-2.5 7-6 8-3.5-1-6-4-6-8V4.7Z" />
       <path d="M7.5 10 9.3 11.8 12.5 8.2" />
     </template>
+
+    <template v-else-if="nom === 'tableau-bord'">
+      <rect x="3" y="3" width="6" height="7" rx="1.2" />
+      <rect x="11" y="3" width="6" height="4" rx="1.2" />
+      <rect x="11" y="9" width="6" height="8" rx="1.2" />
+      <rect x="3" y="12" width="6" height="5" rx="1.2" />
+    </template>
+
+    <template v-else-if="nom === 'grand-livre'">
+      <path d="M4.5 3.5h9a1.5 1.5 0 0 1 1.5 1.5v11.5H6a1.5 1.5 0 0 1-1.5-1.5Z" />
+      <path d="M4.5 15a1.5 1.5 0 0 1 1.5-1.5h9" />
+      <line x1="7.5" y1="6.5" x2="12.5" y2="6.5" />
+    </template>
+
+    <template v-else-if="nom === 'balance'">
+      <line x1="10" y1="3.5" x2="10" y2="16.5" />
+      <line x1="6" y1="16.5" x2="14" y2="16.5" />
+      <line x1="4" y1="6" x2="16" y2="6" />
+      <path d="M4 6 2 11a2.5 2.5 0 0 0 4 0Z" />
+      <path d="M16 6l-2 5a2.5 2.5 0 0 0 4 0Z" />
+    </template>
+
+    <template v-else-if="nom === 'fournisseurs'">
+      <path d="M2.5 5.5h9v8h-9Z" />
+      <path d="M11.5 8h3.2l2.3 2.6v2.9h-5.5Z" />
+      <circle cx="6" cy="14.5" r="1.4" />
+      <circle cx="14" cy="14.5" r="1.4" />
+    </template>
+
+    <template v-else-if="nom === 'parametres'">
+      <line x1="3.5" y1="6" x2="16.5" y2="6" />
+      <line x1="3.5" y1="10" x2="16.5" y2="10" />
+      <line x1="3.5" y1="14" x2="16.5" y2="14" />
+      <circle cx="7" cy="6" r="1.6" fill="currentColor" />
+      <circle cx="13" cy="10" r="1.6" fill="currentColor" />
+      <circle cx="8.5" cy="14" r="1.6" fill="currentColor" />
+    </template>
   </svg>
 </template>
