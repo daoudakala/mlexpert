@@ -10,6 +10,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import RessourceIntrouvable, ValidationMetier
+from app.modules.comptabilite.journaux_par_defaut import creer_journaux_par_defaut
 from app.modules.droits.service import CODE_ROLE_ADMINISTRATEUR_ENTREPRISE, ServiceDroits
 from app.modules.entreprises.models import Entreprise, StatutEntreprise
 from app.modules.entreprises.repository import RepositoryEntreprises
@@ -60,6 +61,9 @@ class ServiceEntreprises:
         )
         self.entreprises.ajouter(entreprise)
         self.db.flush()  # entreprise.id doit exister avant l'affectation ci-dessous
+        # Journaux de base (BQ, CA, AC, VT, OD, RAN) : l'entreprise est
+        # utilisable tout de suite, sans configuration manuelle.
+        creer_journaux_par_defaut(self.db, entreprise.id)
         self.journal.enregistrer(
             module="entreprises",
             type_action=TypeAction.CREER,
