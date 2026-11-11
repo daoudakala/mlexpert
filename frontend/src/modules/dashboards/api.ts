@@ -17,6 +17,7 @@ import type {
   LigneGrandLivre,
   PrevisionTresorerie,
   ResultatDetectionAlertes,
+  TableauBord,
   TableauComptabilite,
   TableauDirection,
   TrancheAgee,
@@ -174,6 +175,29 @@ export function usePrevisionTresorerie(
       return data;
     },
     enabled: () => !!entrepriseId.value,
+  });
+}
+
+/** Tableau de bord d'accueil. `exerciceId` null = exercice courant (choisi
+ * par le backend) ; `dateDebut`/`dateFin` vides = exercice entier. */
+export function useTableauBord(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: Ref<string | null>,
+  dateDebut: Ref<string | null>,
+  dateFin: Ref<string | null>,
+) {
+  return useQuery({
+    queryKey: ["tableau-bord", entrepriseId, exerciceId, dateDebut, dateFin],
+    queryFn: async () => {
+      const params: Record<string, string> = {};
+      if (exerciceId.value) params.exercice_id = exerciceId.value;
+      if (dateDebut.value) params.date_debut = dateDebut.value;
+      if (dateFin.value) params.date_fin = dateFin.value;
+      const { data } = await apiClient.get<TableauBord>(`${racine(entrepriseId)}/tableau-bord`, { params });
+      return data;
+    },
+    enabled: () => !!entrepriseId.value,
+    retry: false,
   });
 }
 

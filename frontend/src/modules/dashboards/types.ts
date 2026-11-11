@@ -156,3 +156,58 @@ export interface PrevisionTresorerie {
   montant_sans_echeance_clients: string;
   montant_sans_echeance_fournisseurs: string;
 }
+
+// --- Tableau de bord (page d'accueil) --------------------------------------
+// Alignés sur TableauBordLecture (schemas.py). Les montants sont des
+// Decimal sérialisés en chaîne ; `variation_pourcentage` est un nombre.
+
+export interface IndicateurComparatif {
+  valeur: string;
+  valeur_n1: string | null;
+  variation_pourcentage: number | null;
+}
+
+export interface ActifCirculant {
+  total: string;
+  creances_clients: string;
+  autres_creances: string;
+  stocks: string;
+}
+
+export interface PassifCirculant {
+  total: string;
+  dettes_fournisseurs: string;
+  dettes_fiscales: string;
+  dettes_sociales: string;
+  autres_dettes: string;
+}
+
+export interface BilanFonctionnel {
+  immobilisations: string;
+  actif_circulant: string;
+  tresorerie_actif: string;
+  ressources_durables: string;
+  passif_circulant: string;
+  tresorerie_passif: string;
+}
+
+export interface TableauBord {
+  exercice_id: string;
+  annee: number;
+  annee_precedente: number | null;
+  date_debut: string;
+  date_fin: string;
+  chiffre_affaires: IndicateurComparatif;
+  marge_commerciale: IndicateurComparatif;
+  valeur_ajoutee: IndicateurComparatif;
+  excedent_brut_exploitation: IndicateurComparatif;
+  resultat_exploitation: string;
+  resultat_net: string;
+  capacite_autofinancement: string;
+  tresorerie: string;
+  actif_circulant: ActifCirculant;
+  passif_circulant: PassifCirculant;
+  fonds_roulement: string;
+  besoin_fonds_roulement: string;
+  bilan_fonctionnel: BilanFonctionnel;
+}
