@@ -34,13 +34,21 @@ class RepositoryReporting:
         self.entreprise_id = entreprise_id
 
     def totaux_par_compte(
-        self, exercice_id: uuid.UUID
+        self,
+        exercice_id: uuid.UUID,
+        *,
+        date_debut: date | None = None,
+        date_fin: date | None = None,
     ) -> list[tuple[uuid.UUID, str, str, int, Decimal, Decimal]]:
         """(compte_id, numero, libelle, classe, total_debit, total_credit)
         pour chaque compte mouvementé sur cet exercice, écritures validées
         uniquement. Base de la balance générale, du bilan et du compte de
         résultat détaillé (voir `service.py`) — `classe` ne sert qu'à ces
-        deux derniers, la balance générale l'ignore simplement."""
+        deux derniers, la balance générale l'ignore simplement.
+
+        `date_debut` / `date_fin` (facultatifs, inclusifs) restreignent aux
+        écritures de cette période — utilisés par le tableau de bord
+        (filtre par période) ; sans eux, tout l'exercice est pris."""
         requete = (
             select(
                 Compte.id,
@@ -61,6 +69,10 @@ class RepositoryReporting:
             .group_by(Compte.id, Compte.numero, Compte.libelle, Compte.classe)
             .order_by(Compte.numero)
         )
+        if date_debut is not None:
+            requete = requete.where(Ecriture.date_ecriture >= date_debut)
+        if date_fin is not None:
+            requete = requete.where(Ecriture.date_ecriture <= date_fin)
         return list(self.db.execute(requete).all())
 
     def totaux_par_classe(self, exercice_id: uuid.UUID, classes: tuple[int, ...]) -> dict[int, tuple[Decimal, Decimal]]:

@@ -8,6 +8,7 @@ protégées par une unique permission `dashboard.consulter` — pas de
 """
 
 import uuid
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Response
@@ -25,11 +26,13 @@ from app.modules.dashboards.schemas import (
     LigneEcheanceLecture,
     LigneGrandLivreLecture,
     PrevisionTresorerieLecture,
+    TableauBordLecture,
     TableauComptabiliteLecture,
     TableauDirectionLecture,
     TrancheAgeeLecture,
 )
 from app.modules.dashboards.service import ServiceReporting
+from app.modules.dashboards.tableau_bord import ServiceTableauBord
 from app.core.exceptions import RessourceIntrouvable
 from app.modules.entreprises.repository import RepositoryEntreprises
 from app.modules.exercices.repository import RepositoryExercice
@@ -230,3 +233,24 @@ def lire_tableau_comptabilite(
 ) -> TableauComptabiliteLecture:
     service = ServiceReporting(db, contexte.entreprise_id)
     return TableauComptabiliteLecture.model_validate(service.tableau_comptabilite())
+
+@router.get(
+    "/entreprises/{entreprise_id}/tableau-bord",
+    response_model=TableauBordLecture,
+)
+def lire_tableau_bord(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID | None = None,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> TableauBordLecture:
+    """Page d'accueil : CA, marge commerciale, valeur ajoutée, EBE (avec
+    comparaison N-1), trésorerie, CAF, actif/passif circulant, FR/BFR et
+    bilan fonctionnel — voir `dashboards/tableau_bord.py`. Sans
+    `exercice_id`, l'exercice courant ; sans dates, l'exercice entier."""
+    service = ServiceTableauBord(db, contexte.entreprise_id)
+    return TableauBordLecture.model_validate(
+        service.tableau_bord(exercice_id=exercice_id, date_debut=date_debut, date_fin=date_fin)
+    )

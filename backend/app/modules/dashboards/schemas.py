@@ -161,3 +161,66 @@ class TrancheAgeeLecture(BaseModel):
     jours_plus_90: Decimal
     echeance_inconnue: Decimal
     total: Decimal
+
+# --- Tableau de bord (page d'accueil) ---------------------------------------
+
+
+class IndicateurComparatifLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    valeur: Decimal
+    valeur_n1: Decimal | None
+    variation_pourcentage: float | None
+
+
+class ActifCirculantLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    total: Decimal
+    creances_clients: Decimal
+    autres_creances: Decimal
+    stocks: Decimal
+
+
+class PassifCirculantLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    total: Decimal
+    dettes_fournisseurs: Decimal
+    dettes_fiscales: Decimal
+    dettes_sociales: Decimal
+    autres_dettes: Decimal
+
+
+class BilanFonctionnelLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    immobilisations: Decimal
+    actif_circulant: Decimal
+    tresorerie_actif: Decimal
+    ressources_durables: Decimal
+    passif_circulant: Decimal
+    tresorerie_passif: Decimal
+
+
+class TableauBordLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    exercice_id: uuid.UUID
+    annee: int
+    annee_precedente: int | None
+    date_debut: date
+    date_fin: date
+    chiffre_affaires: IndicateurComparatifLecture
+    marge_commerciale: IndicateurComparatifLecture
+    valeur_ajoutee: IndicateurComparatifLecture
+    excedent_brut_exploitation: IndicateurComparatifLecture
+    resultat_exploitation: Decimal
+    resultat_net: Decimal
+    capacite_autofinancement: Decimal
+    tresorerie: Decimal
+    actif_circulant: ActifCirculantLecture
+    passif_circulant: PassifCirculantLecture
+    fonds_roulement: Decimal
+    besoin_fonds_roulement: Decimal
+    bilan_fonctionnel: BilanFonctionnelLecture
