@@ -149,8 +149,8 @@ const sections = computed<Section[]>(() => [
     titre: "États",
     elements: [
       lien(rapport("Grand livre", "grand-livre"), "grand-livre"),
-      groupe("balances", "Balances", "balance", [
-        rapport("Balance générale", "balance"),
+      lien(rapport("Balance générale", "balance"), "balance"),
+      groupe("balances", "Autres balances", "balance", [
         rapport("Comparaison N-1", "comparaison"),
         rapport("Balance âgée", "balance-agee", { query: { type: "client" } }),
       ]),
