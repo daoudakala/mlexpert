@@ -159,10 +159,11 @@ const sections = computed<Section[]>(() => [
         rapport("Résultat détaillé", "resultat-detaille"),
         rapport("Bilan", "bilan"),
       ]),
-      groupe("pilotage", "Pilotage", "dashboards", [
+      // Le pilotage (tableaux Direction / Comptabilité) s'affiche sur le
+      // tableau de bord d'accueil, pas dans le menu.
+      groupe("echeances", "Échéances & prévisions", "dashboards", [
         rapport("Échéancier", "echeancier", { query: { type: "client" } }),
         rapport("Prévision de trésorerie", "prevision-tresorerie"),
-        rapport("Tableaux de pilotage", "pilotage"),
       ]),
       lien(
         {
