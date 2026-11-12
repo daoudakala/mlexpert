@@ -224,3 +224,45 @@ class TableauBordLecture(BaseModel):
     fonds_roulement: Decimal
     besoin_fonds_roulement: Decimal
     bilan_fonctionnel: BilanFonctionnelLecture
+
+
+# --- Balance générale à colonnes (à-nouveaux / mouvements / solde) -----------
+
+
+class LigneBalanceDetailleeLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    compte_id: uuid.UUID
+    numero: str
+    libelle: str
+    classe: int
+    a_nouveau_debit: Decimal
+    a_nouveau_credit: Decimal
+    mouvement_debit: Decimal
+    mouvement_credit: Decimal
+    solde_debit: Decimal
+    solde_credit: Decimal
+
+
+class TotauxBalanceLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    a_nouveau_debit: Decimal
+    a_nouveau_credit: Decimal
+    mouvement_debit: Decimal
+    mouvement_credit: Decimal
+    solde_debit: Decimal
+    solde_credit: Decimal
+
+
+class BalanceDetailleeLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    exercice_id: uuid.UUID
+    date_debut: date
+    date_fin: date
+    lignes: list[LigneBalanceDetailleeLecture]
+    totaux_bilan: TotauxBalanceLecture
+    totaux_gestion: TotauxBalanceLecture
+    totaux_balance: TotauxBalanceLecture
+    equilibree: bool

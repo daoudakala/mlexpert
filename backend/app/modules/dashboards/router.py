@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import ContexteEntreprise, exiger_permission
 from app.core.database import get_db
 from app.modules.dashboards.export import exporter_etats_financiers
+from app.modules.dashboards.balance import ServiceBalance, exporter_balance
 from app.modules.dashboards.schemas import (
+    BalanceDetailleeLecture,
     BilanLecture,
     CompteResultatDetailleLecture,
     CompteResultatSommaireLecture,
@@ -33,7 +35,7 @@ from app.modules.dashboards.schemas import (
 )
 from app.modules.dashboards.service import ServiceReporting
 from app.modules.dashboards.tableau_bord import ServiceTableauBord
-from app.core.exceptions import RessourceIntrouvable
+from app.core.exceptions import RessourceIntrouvable, ValidationMetier
 from app.modules.entreprises.repository import RepositoryEntreprises
 from app.modules.exercices.repository import RepositoryExercice
 
@@ -253,4 +255,66 @@ def lire_tableau_bord(
     service = ServiceTableauBord(db, contexte.entreprise_id)
     return TableauBordLecture.model_validate(
         service.tableau_bord(exercice_id=exercice_id, date_debut=date_debut, date_fin=date_fin)
+    )
+
+
+def _lire_classes(classes: str | None) -> set[int] | None:
+    """`?classes=1,2,5` -> {1, 2, 5} ; absent ou vide = toutes les classes."""
+    if not classes:
+        return None
+    try:
+        return {int(c) for c in classes.split(",") if c.strip()}
+    except ValueError:
+        raise ValidationMetier("Le paramètre 'classes' doit être une liste de chiffres séparés par des virgules.")
+
+
+@router.get(
+    "/entreprises/{entreprise_id}/exercices/{exercice_id}/balance-detaillee",
+    response_model=BalanceDetailleeLecture,
+)
+def lire_balance_detaillee(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    classes: str | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> BalanceDetailleeLecture:
+    """Balance générale à colonnes (à-nouveaux, mouvements, solde) avec
+    totaux bilan / gestion / balance — voir `dashboards/balance.py`."""
+    service = ServiceBalance(db, contexte.entreprise_id)
+    return BalanceDetailleeLecture.model_validate(
+        service.balance_detaillee(
+            exercice_id, date_debut=date_debut, date_fin=date_fin, classes=_lire_classes(classes)
+        )
+    )
+
+
+@router.get("/entreprises/{entreprise_id}/exercices/{exercice_id}/balance-detaillee/export")
+def exporter_balance_detaillee(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    classes: str | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Export Excel de la balance, avec les mêmes filtres que l'écran."""
+    entreprise = RepositoryEntreprises(db).obtenir(contexte.entreprise_id)
+    if entreprise is None:
+        raise RessourceIntrouvable("Entreprise introuvable.")
+    exercice = RepositoryExercice(db, contexte.entreprise_id).obtenir(exercice_id)
+    if exercice is None:
+        raise RessourceIntrouvable("Exercice introuvable pour cette entreprise.")
+    balance = ServiceBalance(db, contexte.entreprise_id).balance_detaillee(
+        exercice_id, date_debut=date_debut, date_fin=date_fin, classes=_lire_classes(classes)
+    )
+    contenu = exporter_balance(entreprise=entreprise, exercice=exercice, balance=balance)
+    nom_fichier = f"balance_generale_{balance.date_fin:%Y%m%d}.xlsx"
+    return Response(
+        content=contenu,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
     )

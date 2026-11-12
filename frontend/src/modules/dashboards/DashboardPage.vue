@@ -18,12 +18,7 @@ import { computed, ref } from "vue";
 import { useAuth } from "@/core/auth/useAuth";
 import { formaterMontant } from "@/core/ui/formatage";
 import { useExercices } from "@/modules/exercices/api";
-import {
-  useMutationDetecterAlertes,
-  useTableauBord,
-  useTableauComptabilite,
-  useTableauDirection,
-} from "./api";
+import { useTableauBord } from "./api";
 import type { IndicateurComparatif } from "./types";
 
 const { utilisateur, contexteActif, aPermission } = useAuth();
@@ -35,11 +30,10 @@ const entrepriseId = computed(() => (peutVoir.value ? contexteActif.value?.entre
 
 const { data: exercices } = useExercices(entrepriseId);
 const exerciceChoisi = ref<string | null>(null);
+// Le filtre par période a été retiré de l'écran : le tableau de bord porte
+// toujours sur l'exercice entier (le backend accepte encore des dates).
 const dateDebut = ref<string | null>(null);
 const dateFin = ref<string | null>(null);
-const filtreOuvert = ref(false);
-const brouillonDebut = ref("");
-const brouillonFin = ref("");
 
 const { data: tb, isLoading, isError } = useTableauBord(entrepriseId, exerciceChoisi, dateDebut, dateFin);
 
@@ -53,24 +47,7 @@ function libelleExercice(dateFinExercice: string): string {
 
 function surChangementExercice(evenement: Event): void {
   exerciceChoisi.value = (evenement.target as HTMLSelectElement).value || null;
-  reinitialiserPeriode();
 }
-
-function appliquerPeriode(): void {
-  dateDebut.value = brouillonDebut.value || null;
-  dateFin.value = brouillonFin.value || null;
-  filtreOuvert.value = false;
-}
-
-function reinitialiserPeriode(): void {
-  dateDebut.value = null;
-  dateFin.value = null;
-  brouillonDebut.value = "";
-  brouillonFin.value = "";
-  filtreOuvert.value = false;
-}
-
-const periodeFiltree = computed(() => dateDebut.value !== null || dateFin.value !== null);
 
 // --- Formatage -----------------------------------------------------------------
 
@@ -164,27 +141,6 @@ const etapesSig = computed(() => {
   const max = Math.max(...etapes.map((e) => Math.abs(e.valeur)), 1);
   return etapes.map((e) => ({ ...e, largeur: Math.max(30, (Math.abs(e.valeur) / max) * 100) }));
 });
-
-// --- Pilotage Direction / Comptabilité ----------------------------------------------
-
-const { data: direction } = useTableauDirection(entrepriseId);
-const { data: comptabilite } = useTableauComptabilite(entrepriseId);
-const mutationDetecterAlertes = useMutationDetecterAlertes(entrepriseId);
-const resultatDetection = ref<Record<string, number> | null>(null);
-
-const LIBELLES_TYPES_ALERTE: Record<string, string> = {
-  echeance_client: "Échéances clients",
-  echeance_fournisseur: "Échéances fournisseurs",
-  demande_piece_non_traitee: "Demandes de pièces non traitées",
-  validation_en_attente: "Validations en attente",
-  cloture_comptable: "Clôtures comptables",
-  document_manquant: "Documents à renouveler",
-};
-
-async function lancerDetectionAlertes(): Promise<void> {
-  const resultat = await mutationDetecterAlertes.mutateAsync();
-  resultatDetection.value = resultat.notifications_creees;
-}
 </script>
 
 <template>
@@ -198,7 +154,7 @@ async function lancerDetectionAlertes(): Promise<void> {
         </p>
       </div>
 
-      <div class="relative flex flex-wrap items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <select
           :value="exerciceAffiche"
           class="rounded-md border border-border px-3 py-1.5 text-sm text-text"
@@ -208,48 +164,6 @@ async function lancerDetectionAlertes(): Promise<void> {
           <option v-for="e in exercices" :key="e.id" :value="e.id">{{ libelleExercice(e.date_fin) }}</option>
         </select>
 
-        <button
-          type="button"
-          class="rounded-md border px-3 py-1.5 text-sm hover:bg-surface-muted"
-          :class="periodeFiltree ? 'border-primary text-primary' : 'border-border text-text'"
-          @click="filtreOuvert = !filtreOuvert"
-        >
-          Filtrer par période<span v-if="periodeFiltree"> •</span>
-        </button>
-
-        <router-link
-          v-if="aPermission('ecriture.creer')"
-          :to="{ name: 'comptabilite.ecriture.nouvelle' }"
-          class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
-        >
-          Saisie classique
-        </router-link>
-
-        <div
-          v-if="filtreOuvert"
-          class="absolute right-0 top-full z-10 mt-2 w-72 space-y-3 rounded-lg border border-border bg-surface p-4 shadow-lg"
-        >
-          <div>
-            <label class="mb-1 block text-xs text-text-muted">Du</label>
-            <input v-model="brouillonDebut" type="date" class="w-full rounded-md border border-border px-2 py-1.5 text-sm text-text" />
-          </div>
-          <div>
-            <label class="mb-1 block text-xs text-text-muted">Au</label>
-            <input v-model="brouillonFin" type="date" class="w-full rounded-md border border-border px-2 py-1.5 text-sm text-text" />
-          </div>
-          <p class="text-xs text-text-muted">
-            Les indicateurs de gestion portent sur la période ; la structure financière (trésorerie, FR, BFR)
-            est cumulée jusqu'à la date de fin.
-          </p>
-          <div class="flex justify-end gap-2">
-            <button type="button" class="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface-muted" @click="reinitialiserPeriode">
-              Réinitialiser
-            </button>
-            <button type="button" class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary-hover" @click="appliquerPeriode">
-              Appliquer
-            </button>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -402,75 +316,6 @@ async function lancerDetectionAlertes(): Promise<void> {
         </div>
       </div>
     </template>
-
-    <!-- Pilotage Direction / Comptabilité -->
-    <section class="space-y-4">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 class="text-base font-semibold text-text">Pilotage</h2>
-        <div v-if="aPermission('notification.administrer')" class="flex items-center gap-3">
-          <p v-if="resultatDetection" class="text-xs text-text-muted">
-            <template v-if="Object.keys(resultatDetection).length === 0">Aucune nouvelle alerte à signaler.</template>
-            <template v-else>
-              {{
-                Object.entries(resultatDetection)
-                  .map(([type, n]) => `${LIBELLES_TYPES_ALERTE[type] ?? type} (${n})`)
-                  .join(", ")
-              }}
-            </template>
-          </p>
-          <button
-            type="button"
-            class="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface-muted disabled:opacity-50"
-            :disabled="mutationDetecterAlertes.isPending.value"
-            @click="lancerDetectionAlertes"
-          >
-            {{ mutationDetecterAlertes.isPending.value ? "Détection en cours…" : "Lancer la détection des alertes" }}
-          </button>
-        </div>
-      </div>
-
-      <div v-if="direction" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Créances clients ouvertes</p>
-          <p class="mt-1 text-base font-semibold text-text">{{ fcfa(direction.creances_clients_ouvertes) }}</p>
-        </div>
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Dettes fournisseurs ouvertes</p>
-          <p class="mt-1 text-base font-semibold text-text">{{ fcfa(direction.dettes_fournisseurs_ouvertes) }}</p>
-        </div>
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Échéances clients en retard</p>
-          <p class="mt-1 text-base font-semibold" :class="direction.echeances_clients_en_retard > 0 ? 'text-danger' : 'text-text'">
-            {{ direction.echeances_clients_en_retard }}
-          </p>
-        </div>
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Échéances fournisseurs en retard</p>
-          <p class="mt-1 text-base font-semibold" :class="direction.echeances_fournisseurs_en_retard > 0 ? 'text-danger' : 'text-text'">
-            {{ direction.echeances_fournisseurs_en_retard }}
-          </p>
-        </div>
-      </div>
-
-      <div v-if="comptabilite" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Écritures en brouillon</p>
-          <p class="mt-1 text-base font-semibold text-text">{{ comptabilite.ecritures_brouillon }}</p>
-        </div>
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Lignes bancaires non lettrées</p>
-          <p class="mt-1 text-base font-semibold text-text">{{ comptabilite.lignes_bancaires_non_lettrees }}</p>
-        </div>
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Clôtures à venir (30 jours)</p>
-          <p class="mt-1 text-base font-semibold text-text">{{ comptabilite.clotures_a_venir }}</p>
-        </div>
-        <div class="rounded-lg border border-border bg-surface p-4">
-          <p class="text-xs text-text-muted">Demandes clients non traitées</p>
-          <p class="mt-1 text-base font-semibold text-text">{{ comptabilite.demandes_non_traitees }}</p>
-        </div>
-      </div>
-    </section>
   </div>
 
   <div v-else>

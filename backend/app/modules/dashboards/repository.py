@@ -18,10 +18,17 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from app.modules.comptabilite.models import Compte, Ecriture, LigneEcriture, StatutEcriture
+from app.modules.comptabilite.models import (
+    Compte,
+    Ecriture,
+    Journal,
+    LigneEcriture,
+    StatutEcriture,
+    TypeJournal,
+)
 from app.modules.exercices.models import Exercice, StatutExercice
 from app.modules.portail_client.models import DemandeDocument, StatutDemandeDocument
 from app.modules.tiers.models import Tiers
@@ -73,6 +80,56 @@ class RepositoryReporting:
             requete = requete.where(Ecriture.date_ecriture >= date_debut)
         if date_fin is not None:
             requete = requete.where(Ecriture.date_ecriture <= date_fin)
+        return list(self.db.execute(requete).all())
+
+    def totaux_balance_detaillee(
+        self,
+        exercice_id: uuid.UUID,
+        *,
+        date_debut: date,
+        date_fin: date,
+    ) -> list[tuple[uuid.UUID, str, str, int, Decimal, Decimal, Decimal, Decimal]]:
+        """(compte_id, numero, libelle, classe, an_debit, an_credit,
+        mv_debit, mv_credit) pour la balance générale à colonnes.
+
+        - À-nouveaux = écritures du journal de report à nouveau (type
+          `a_nouveaux`) + toutes les écritures antérieures à `date_debut` ;
+        - Mouvements = écritures des autres journaux entre `date_debut` et
+          `date_fin` inclus.
+        Les écritures postérieures à `date_fin` sont ignorées ; validées
+        uniquement. Sur l'exercice entier (`date_debut` = début d'exercice)
+        les à-nouveaux se réduisent donc au journal RAN."""
+        est_ran = Journal.type_journal == TypeJournal.A_NOUVEAUX.value
+        est_an = est_ran | (Ecriture.date_ecriture < date_debut)
+        est_mv = ~est_ran & (Ecriture.date_ecriture >= date_debut)
+
+        def somme(condition, colonne):
+            return func.coalesce(func.sum(case((condition, colonne), else_=0)), 0)
+
+        requete = (
+            select(
+                Compte.id,
+                Compte.numero,
+                Compte.libelle,
+                Compte.classe,
+                somme(est_an, LigneEcriture.debit),
+                somme(est_an, LigneEcriture.credit),
+                somme(est_mv, LigneEcriture.debit),
+                somme(est_mv, LigneEcriture.credit),
+            )
+            .select_from(LigneEcriture)
+            .join(Ecriture, LigneEcriture.ecriture_id == Ecriture.id)
+            .join(Journal, Ecriture.journal_id == Journal.id)
+            .join(Compte, LigneEcriture.compte_id == Compte.id)
+            .where(
+                Ecriture.entreprise_id == self.entreprise_id,
+                Ecriture.exercice_id == exercice_id,
+                Ecriture.statut == StatutEcriture.VALIDEE.value,
+                Ecriture.date_ecriture <= date_fin,
+            )
+            .group_by(Compte.id, Compte.numero, Compte.libelle, Compte.classe)
+            .order_by(Compte.numero)
+        )
         return list(self.db.execute(requete).all())
 
     def totaux_par_classe(self, exercice_id: uuid.UUID, classes: tuple[int, ...]) -> dict[int, tuple[Decimal, Decimal]]:
