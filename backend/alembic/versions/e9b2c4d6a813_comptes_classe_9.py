@@ -4,6 +4,7 @@ Revision ID: e9b2c4d6a813
 Revises: d8a1b3c5f702
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "e9b2c4d6a813"
@@ -15,8 +16,9 @@ depends_on = None
 def _nom_contrainte_classe(connexion) -> str | None:
     """Retrouve le nom réel de la contrainte CHECK sur `classe` (il dépend
     de la convention de nommage de la base)."""
-    resultat = connexion.exec_driver_sql(
-        """
+    resultat = connexion.execute(
+        sa.text(
+            """
         SELECT c.conname
         FROM pg_constraint c
         JOIN pg_class t ON t.oid = c.conrelid
@@ -24,7 +26,8 @@ def _nom_contrainte_classe(connexion) -> str | None:
           AND c.contype = 'c'
           AND pg_get_constraintdef(c.oid) ILIKE '%classe%'
           AND pg_get_constraintdef(c.oid) NOT ILIKE '%collectif%'
-        """
+            """
+        )
     ).fetchone()
     return resultat[0] if resultat else None
 
