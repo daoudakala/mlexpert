@@ -147,12 +147,6 @@ const router = createRouter({
           meta: { permission: "immobilisation.creer" },
         },
         {
-          path: "immobilisations/a-confirmer",
-          name: "immobilisations.a-confirmer",
-          component: () => import("@/modules/immobilisations/AcquisitionsAConfirmer.vue"),
-          meta: { permission: "immobilisation.creer" },
-        },
-        {
           path: "immobilisations/:id",
           name: "immobilisations.detail",
           component: () => import("@/modules/immobilisations/ImmobilisationDetail.vue"),
@@ -222,6 +216,12 @@ const router = createRouter({
           path: "dashboards/balance-generale",
           name: "dashboards.balance-generale",
           component: () => import("@/modules/dashboards/BalanceGeneralePage.vue"),
+          meta: { permission: "dashboard.consulter" },
+        },
+        {
+          path: "dashboards/balance-auxiliaire",
+          name: "dashboards.balance-auxiliaire",
+          component: () => import("@/modules/dashboards/BalanceAuxiliairePage.vue"),
           meta: { permission: "dashboard.consulter" },
         },
         {

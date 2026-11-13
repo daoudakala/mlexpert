@@ -132,6 +132,64 @@ class RepositoryReporting:
         )
         return list(self.db.execute(requete).all())
 
+    def totaux_balance_auxiliaire(
+        self,
+        exercice_id: uuid.UUID,
+        *,
+        date_debut: date,
+        date_fin: date,
+        role: str = "tous",
+    ) -> list[tuple]:
+        """(compte_id, numero, libelle, tiers_id, code_tiers, nom_tiers,
+        an_debit, an_credit, mv_debit, mv_credit) par compte collectif de
+        tiers (40x/41x) et par tiers ; tiers_id est NULL pour les lignes sans
+        tiers affecté. Mêmes règles d'à-nouveaux/mouvements que la balance
+        générale ; validées uniquement."""
+        est_ran = Journal.type_journal == TypeJournal.A_NOUVEAUX.value
+        est_an = est_ran | (Ecriture.date_ecriture < date_debut)
+        est_mv = ~est_ran & (Ecriture.date_ecriture >= date_debut)
+
+        def somme(condition, colonne):
+            return func.coalesce(func.sum(case((condition, colonne), else_=0)), 0)
+
+        if role == "client":
+            filtre_compte = Compte.numero.like("41%")
+        elif role == "fournisseur":
+            filtre_compte = Compte.numero.like("40%")
+        else:
+            filtre_compte = Compte.numero.like("40%") | Compte.numero.like("41%")
+
+        requete = (
+            select(
+                Compte.id,
+                Compte.numero,
+                Compte.libelle,
+                Tiers.id,
+                Tiers.code,
+                Tiers.raison_sociale,
+                somme(est_an, LigneEcriture.debit),
+                somme(est_an, LigneEcriture.credit),
+                somme(est_mv, LigneEcriture.debit),
+                somme(est_mv, LigneEcriture.credit),
+            )
+            .select_from(LigneEcriture)
+            .join(Ecriture, LigneEcriture.ecriture_id == Ecriture.id)
+            .join(Journal, Ecriture.journal_id == Journal.id)
+            .join(Compte, LigneEcriture.compte_id == Compte.id)
+            .outerjoin(Tiers, LigneEcriture.tiers_id == Tiers.id)
+            .where(
+                Ecriture.entreprise_id == self.entreprise_id,
+                Ecriture.exercice_id == exercice_id,
+                Ecriture.statut == StatutEcriture.VALIDEE.value,
+                Ecriture.date_ecriture <= date_fin,
+                Compte.classe == 4,
+                filtre_compte,
+            )
+            .group_by(Compte.id, Compte.numero, Compte.libelle, Tiers.id, Tiers.code, Tiers.raison_sociale)
+            .order_by(Compte.numero, Tiers.code)
+        )
+        return list(self.db.execute(requete).all())
+
     def _filtre_comptes_journal(self, requete, *, compte_debut, compte_fin, journal_id):
         """Filtres communs au grand livre général : plage de numéros de
         compte (bornes incluses ; `compte_fin` couvre aussi les comptes dont

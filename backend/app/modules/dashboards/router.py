@@ -17,10 +17,15 @@ from sqlalchemy.orm import Session
 from app.api.deps import ContexteEntreprise, exiger_permission
 from app.core.database import get_db
 from app.modules.dashboards.export import exporter_etats_financiers
+from app.modules.dashboards.balance_auxiliaire import (
+    ServiceBalanceAuxiliaire,
+    exporter_balance_auxiliaire,
+)
 from app.modules.dashboards.balance import ServiceBalance, exporter_balance
 from app.modules.dashboards.grand_livre import ServiceGrandLivre, exporter_grand_livre
 from app.modules.dashboards.schemas import (
     GrandLivreGeneralLecture,
+    BalanceAuxiliaireLecture,
     BalanceDetailleeLecture,
     BilanLecture,
     CompteResultatDetailleLecture,
@@ -315,6 +320,60 @@ def exporter_balance_detaillee(
     )
     contenu = exporter_balance(entreprise=entreprise, exercice=exercice, balance=balance)
     nom_fichier = f"balance_generale_{balance.date_fin:%Y%m%d}.xlsx"
+    return Response(
+        content=contenu,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
+    )
+
+
+@router.get(
+    "/entreprises/{entreprise_id}/exercices/{exercice_id}/balance-auxiliaire",
+    response_model=BalanceAuxiliaireLecture,
+)
+def lire_balance_auxiliaire(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    role: Literal["client", "fournisseur", "tous"] = "tous",
+    recherche: str | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> BalanceAuxiliaireLecture:
+    """Balance auxiliaire (comptes tiers 40/41) par tiers — voir
+    `dashboards/balance_auxiliaire.py`."""
+    service = ServiceBalanceAuxiliaire(db, contexte.entreprise_id)
+    return BalanceAuxiliaireLecture.model_validate(
+        service.balance_auxiliaire(
+            exercice_id, date_debut=date_debut, date_fin=date_fin, role=role, recherche=recherche
+        )
+    )
+
+
+@router.get("/entreprises/{entreprise_id}/exercices/{exercice_id}/balance-auxiliaire/export")
+def exporter_balance_auxiliaire_xlsx(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    role: Literal["client", "fournisseur", "tous"] = "tous",
+    recherche: str | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Export Excel de la balance auxiliaire, mêmes filtres que l'écran."""
+    entreprise = RepositoryEntreprises(db).obtenir(contexte.entreprise_id)
+    if entreprise is None:
+        raise RessourceIntrouvable("Entreprise introuvable.")
+    exercice = RepositoryExercice(db, contexte.entreprise_id).obtenir(exercice_id)
+    if exercice is None:
+        raise RessourceIntrouvable("Exercice introuvable pour cette entreprise.")
+    balance = ServiceBalanceAuxiliaire(db, contexte.entreprise_id).balance_auxiliaire(
+        exercice_id, date_debut=date_debut, date_fin=date_fin, role=role, recherche=recherche
+    )
+    contenu = exporter_balance_auxiliaire(entreprise=entreprise, exercice=exercice, balance=balance)
+    nom_fichier = f"balance_auxiliaire_{role}_{balance.date_fin:%Y%m%d}.xlsx"
     return Response(
         content=contenu,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

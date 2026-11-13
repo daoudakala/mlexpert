@@ -164,6 +164,14 @@ const sections = computed<Section[]>(() => [
         },
         "balance",
       ),
+      lien(
+        {
+          libelle: "Balance auxiliaire",
+          to: { name: "dashboards.balance-auxiliaire" },
+          permission: "dashboard.consulter",
+        },
+        "balance",
+      ),
       groupe("balances", "Autres balances", "balance", [
         rapport("Comparaison N-1", "comparaison"),
         rapport("Balance âgée", "balance-agee", { query: { type: "client" } }),

@@ -308,3 +308,41 @@ class GrandLivreGeneralLecture(BaseModel):
     comptes: list[CompteGrandLivreLecture]
     total_debit: Decimal
     total_credit: Decimal
+
+
+# --- Balance auxiliaire ------------------------------------------------------
+
+
+class LigneBalanceAuxiliaireLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tiers_id: uuid.UUID | None
+    code: str
+    nom: str
+    a_nouveau_debit: Decimal
+    a_nouveau_credit: Decimal
+    mouvement_debit: Decimal
+    mouvement_credit: Decimal
+    solde_debit: Decimal
+    solde_credit: Decimal
+
+
+class GroupeCompteAuxiliaireLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    compte_id: uuid.UUID
+    numero: str
+    libelle: str
+    lignes: list[LigneBalanceAuxiliaireLecture]
+    totaux: TotauxBalanceLecture
+
+
+class BalanceAuxiliaireLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    exercice_id: uuid.UUID
+    date_debut: date
+    date_fin: date
+    role: str
+    groupes: list[GroupeCompteAuxiliaireLecture]
+    totaux: TotauxBalanceLecture

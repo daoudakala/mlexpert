@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 
 import { apiClient } from "@/core/api/client";
 import type {
+  BalanceAuxiliaire,
   BalanceDetaillee,
   Bilan,
   CompteResultatDetaille,
@@ -381,6 +382,66 @@ export async function exporterGrandLivreGeneral(
   const lien = window.document.createElement("a");
   lien.href = url;
   lien.download = `grand_livre_${filtres.dateFin ?? exerciceId}.xlsx`;
+  lien.click();
+  window.URL.revokeObjectURL(url);
+}
+
+// --- Balance auxiliaire (comptes tiers 40/41) --------------------------------
+
+export type RoleBalanceAuxiliaire = "client" | "fournisseur" | "tous";
+
+function parametresAuxiliaire(
+  dateDebut: string | null,
+  dateFin: string | null,
+  role: RoleBalanceAuxiliaire,
+  recherche: string,
+): Record<string, string> {
+  const params: Record<string, string> = { role };
+  if (dateDebut) params.date_debut = dateDebut;
+  if (dateFin) params.date_fin = dateFin;
+  if (recherche.trim()) params.recherche = recherche.trim();
+  return params;
+}
+
+export function useBalanceAuxiliaire(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: Ref<string | null>,
+  dateDebut: Ref<string | null>,
+  dateFin: Ref<string | null>,
+  role: Ref<RoleBalanceAuxiliaire>,
+  recherche: Ref<string>,
+) {
+  return useQuery({
+    queryKey: ["balance-auxiliaire", entrepriseId, exerciceId, dateDebut, dateFin, role, recherche],
+    queryFn: async () => {
+      const { data } = await apiClient.get<BalanceAuxiliaire>(
+        `${racine(entrepriseId)}/exercices/${exerciceId.value}/balance-auxiliaire`,
+        { params: parametresAuxiliaire(dateDebut.value, dateFin.value, role.value, recherche.value) },
+      );
+      return data;
+    },
+    enabled: () => !!entrepriseId.value && !!exerciceId.value,
+    retry: false,
+  });
+}
+
+/** Télécharge la balance auxiliaire en Excel, avec les filtres de l'écran. */
+export async function exporterBalanceAuxiliaire(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: string,
+  dateDebut: string | null,
+  dateFin: string | null,
+  role: RoleBalanceAuxiliaire,
+  recherche: string,
+): Promise<void> {
+  const reponse = await apiClient.get(
+    `${racine(entrepriseId)}/exercices/${exerciceId}/balance-auxiliaire/export`,
+    { params: parametresAuxiliaire(dateDebut, dateFin, role, recherche), responseType: "blob" },
+  );
+  const url = window.URL.createObjectURL(new Blob([reponse.data]));
+  const lien = window.document.createElement("a");
+  lien.href = url;
+  lien.download = `balance_auxiliaire_${role}_${dateFin ?? exerciceId}.xlsx`;
   lien.click();
   window.URL.revokeObjectURL(url);
 }

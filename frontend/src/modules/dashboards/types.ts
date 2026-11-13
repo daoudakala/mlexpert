@@ -281,3 +281,34 @@ export interface GrandLivreGeneral {
   total_debit: string;
   total_credit: string;
 }
+
+// --- Balance auxiliaire ------------------------------------------------------
+
+export interface LigneBalanceAuxiliaire {
+  tiers_id: string | null;
+  code: string;
+  nom: string;
+  a_nouveau_debit: string;
+  a_nouveau_credit: string;
+  mouvement_debit: string;
+  mouvement_credit: string;
+  solde_debit: string;
+  solde_credit: string;
+}
+
+export interface GroupeCompteAuxiliaire {
+  compte_id: string;
+  numero: string;
+  libelle: string;
+  lignes: LigneBalanceAuxiliaire[];
+  totaux: TotauxBalance;
+}
+
+export interface BalanceAuxiliaire {
+  exercice_id: string;
+  date_debut: string;
+  date_fin: string;
+  role: string;
+  groupes: GroupeCompteAuxiliaire[];
+  totaux: TotauxBalance;
+}
