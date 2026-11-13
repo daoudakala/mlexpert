@@ -48,15 +48,17 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.core.exceptions import RessourceIntrouvable, ValidationMetier
-from app.modules.comptabilite.models import Ecriture
+from app.modules.comptabilite.models import Compte, Ecriture, Journal, LigneEcriture, StatutEcriture, TypeJournal
 from app.modules.comptabilite.repository import RepositoryComptes
 from app.modules.comptabilite.service import LigneSaisie, ServiceComptabilite
 from app.modules.exercices.models import StatutExercice
 from app.modules.exercices.repository import RepositoryExercice
 from app.modules.immobilisations.models import (
+    AcquisitionIgnoree,
     Immobilisation,
     LigneAmortissement,
     MethodeAmortissement,
@@ -67,6 +69,7 @@ from app.modules.immobilisations.repository import RepositoryImmobilisations, Re
 from app.modules.journal_activite.models import TypeAction
 from app.modules.journal_activite.service import ServiceJournalActivite
 from app.modules.tiers.repository import RepositoryTiers
+from app.shared.repository import RepositoryEntreprise
 
 CLASSE_COMPTE_IMMOBILISATION = 2
 CLASSE_COMPTE_DOTATION = 6
@@ -116,6 +119,54 @@ class ImmobilisationCreation:
     fournisseur_id: uuid.UUID | None = None
 
 
+class _RepositoryAcquisitionsIgnorees(RepositoryEntreprise[AcquisitionIgnoree]):
+    modele = AcquisitionIgnoree
+
+
+@dataclass
+class ConfirmationAcquisitionDonnees:
+    libelle: str
+    duree_amortissement_annees: int
+    compte_amortissement_id: uuid.UUID
+    compte_dotation_id: uuid.UUID
+    categorie: str | None = None
+    numero_inventaire: str | None = None
+    date_mise_en_service: date | None = None
+    valeur_residuelle: Decimal = Decimal("0")
+    methode_amortissement: MethodeAmortissement = MethodeAmortissement.LINEAIRE
+    taux_degressif: Decimal | None = None
+    fournisseur_id: uuid.UUID | None = None
+    generer_plan: bool = True
+
+
+@dataclass
+class AcquisitionAConfirmer:
+    ligne_ecriture_id: uuid.UUID
+    ecriture_id: uuid.UUID
+    date_acquisition: date
+    numero_ecriture: str | None
+    libelle: str
+    compte_id: uuid.UUID
+    compte_numero: str
+    compte_libelle: str
+    montant: Decimal
+    tiers_id: uuid.UUID | None
+    compte_amortissement_suggere_id: uuid.UUID | None
+    compte_dotation_suggere_id: uuid.UUID | None
+
+
+@dataclass
+class ResultatConfirmation:
+    immobilisation: Immobilisation
+    lignes_generees: int
+    avertissement: str | None
+
+
+# Comptes d'immobilisations repris automatiquement : 21 à 27. Les comptes 28
+# (amortissements) et 29 (dépréciations) n'en font pas partie.
+PREFIXES_IMMOBILISATION = tuple(f"2{d}" for d in "1234567")
+
+
 class ServiceImmobilisations:
     def __init__(self, db: Session, entreprise_id: uuid.UUID) -> None:
         self.db = db
@@ -125,6 +176,7 @@ class ServiceImmobilisations:
         self.comptes = RepositoryComptes(db, entreprise_id)
         self.exercices = RepositoryExercice(db, entreprise_id)
         self.tiers = RepositoryTiers(db, entreprise_id)
+        self.acquisitions_ignorees = _RepositoryAcquisitionsIgnorees(db, entreprise_id)
         self.journal_activite = ServiceJournalActivite(db)
 
     # --- Immobilisations -----------------------------------------------------
@@ -216,6 +268,191 @@ class ServiceImmobilisations:
 
     def lister_immobilisations(self, *, statut: str | None = None) -> list[Immobilisation]:
         return self.immobilisations.lister(statut=statut)
+
+    # --- Reprise automatique depuis la comptabilité (cahier, point VII) -------
+
+    def _requete_acquisitions(self):
+        """Lignes d'écriture VALIDÉES qui débitent un compte 21-27, hors
+        journal de report à nouveau (soldes d'ouverture sans date
+        d'acquisition fiable), hors écritures d'extourne ou extournées, et
+        qui n'ont ni fiche ni décision « ignorer »."""
+        extourne = aliased(Ecriture)
+        deja_reprises = select(Immobilisation.ligne_acquisition_id).where(
+            Immobilisation.ligne_acquisition_id.is_not(None)
+        )
+        ignorees = select(AcquisitionIgnoree.ligne_ecriture_id)
+        return (
+            select(LigneEcriture, Ecriture, Compte)
+            .join(Ecriture, Ecriture.id == LigneEcriture.ecriture_id)
+            .join(Compte, Compte.id == LigneEcriture.compte_id)
+            .join(Journal, Journal.id == Ecriture.journal_id)
+            .where(
+                LigneEcriture.entreprise_id == self.entreprise_id,
+                Ecriture.statut == StatutEcriture.VALIDEE.value,
+                Ecriture.ecriture_extournee_id.is_(None),
+                Journal.type_journal != TypeJournal.A_NOUVEAUX.value,
+                Compte.classe == CLASSE_COMPTE_IMMOBILISATION,
+                or_(*[Compte.numero.like(f"{p}%") for p in PREFIXES_IMMOBILISATION]),
+                LigneEcriture.debit > 0,
+                ~exists().where(
+                    extourne.ecriture_extournee_id == Ecriture.id,
+                    extourne.statut == StatutEcriture.VALIDEE.value,
+                ),
+                LigneEcriture.id.not_in(deja_reprises),
+                LigneEcriture.id.not_in(ignorees),
+            )
+            .order_by(Ecriture.date_ecriture, Ecriture.numero)
+        )
+
+    def lister_acquisitions_a_confirmer(self) -> list[AcquisitionAConfirmer]:
+        comptes = {
+            c.numero: c for c in self.comptes.lister(actifs_seulement=True, limite=100_000)
+        }
+        resultat: list[AcquisitionAConfirmer] = []
+        for ligne, ecriture, compte in self.db.execute(self._requete_acquisitions()).all():
+            amort = self._suggerer_compte_amortissement(compte.numero, comptes)
+            dotation = self._suggerer_compte_dotation(compte.numero, comptes)
+            resultat.append(
+                AcquisitionAConfirmer(
+                    ligne_ecriture_id=ligne.id,
+                    ecriture_id=ecriture.id,
+                    date_acquisition=ecriture.date_ecriture,
+                    numero_ecriture=ecriture.numero,
+                    libelle=ligne.libelle or ecriture.libelle,
+                    compte_id=compte.id,
+                    compte_numero=compte.numero,
+                    compte_libelle=compte.libelle,
+                    montant=ligne.debit,
+                    tiers_id=ligne.tiers_id,
+                    compte_amortissement_suggere_id=amort.id if amort else None,
+                    compte_dotation_suggere_id=dotation.id if dotation else None,
+                )
+            )
+        return resultat
+
+    def confirmer_acquisition(
+        self, ligne_ecriture_id: uuid.UUID, donnees: ConfirmationAcquisitionDonnees, *, auteur_id: uuid.UUID
+    ) -> ResultatConfirmation:
+        """Crée la fiche d'immobilisation à partir d'une ligne d'acquisition :
+        compte, date d'acquisition et valeur d'origine viennent de
+        l'écriture ; le reste (durée, méthode, comptes 28/68...) est confirmé
+        par le comptable. Génère ensuite, si demandé, le plan d'amortissement
+        sur les exercices déjà ouverts (les dotations ne sont PAS
+        comptabilisées automatiquement)."""
+        ligne, ecriture, compte = self._obtenir_acquisition_ou_lever(ligne_ecriture_id)
+        immobilisation = self.creer_immobilisation(
+            ImmobilisationCreation(
+                libelle=donnees.libelle,
+                categorie=donnees.categorie,
+                numero_inventaire=donnees.numero_inventaire,
+                date_acquisition=ecriture.date_ecriture,
+                date_mise_en_service=donnees.date_mise_en_service or ecriture.date_ecriture,
+                valeur_origine=ligne.debit,
+                valeur_residuelle=donnees.valeur_residuelle,
+                duree_amortissement_annees=donnees.duree_amortissement_annees,
+                methode_amortissement=donnees.methode_amortissement,
+                taux_degressif=donnees.taux_degressif,
+                compte_immobilisation_id=compte.id,
+                compte_amortissement_id=donnees.compte_amortissement_id,
+                compte_dotation_id=donnees.compte_dotation_id,
+                fournisseur_id=donnees.fournisseur_id,
+            ),
+            auteur_id=auteur_id,
+        )
+        immobilisation.ligne_acquisition_id = ligne.id
+        self.db.flush()
+        self.journal_activite.enregistrer(
+            module="immobilisations",
+            type_action=TypeAction.CREER,
+            utilisateur_id=auteur_id,
+            entreprise_id=self.entreprise_id,
+            type_objet="Immobilisation",
+            objet_id=immobilisation.id,
+            description=(
+                f"Reprise de l'immobilisation '{immobilisation.libelle}' depuis l'écriture "
+                f"{ecriture.numero or ecriture.id} (compte {compte.numero})."
+            ),
+            valeurs_apres={"ligne_acquisition_id": str(ligne.id)},
+        )
+        nombre, avertissement = (0, None)
+        if donnees.generer_plan:
+            nombre, avertissement = self._generer_plan_exercices_existants(immobilisation, auteur_id=auteur_id)
+        return ResultatConfirmation(immobilisation, nombre, avertissement)
+
+    def ignorer_acquisition(self, ligne_ecriture_id: uuid.UUID, *, auteur_id: uuid.UUID) -> None:
+        ligne, ecriture, compte = self._obtenir_acquisition_ou_lever(ligne_ecriture_id)
+        self.acquisitions_ignorees.ajouter(AcquisitionIgnoree(ligne_ecriture_id=ligne.id))
+        self.journal_activite.enregistrer(
+            module="immobilisations",
+            type_action=TypeAction.MODIFIER,
+            utilisateur_id=auteur_id,
+            entreprise_id=self.entreprise_id,
+            type_objet="Ecriture",
+            objet_id=ecriture.id,
+            description=(
+                f"Acquisition sur le compte {compte.numero} non reprise en immobilisation "
+                f"(écriture {ecriture.numero or ecriture.id})."
+            ),
+        )
+
+    def _obtenir_acquisition_ou_lever(self, ligne_ecriture_id: uuid.UUID):
+        ligne = self.db.execute(
+            self._requete_acquisitions().where(LigneEcriture.id == ligne_ecriture_id)
+        ).first()
+        if ligne is None:
+            raise ValidationMetier(
+                "Cette ligne n'est pas une acquisition à confirmer (déjà reprise, ignorée, "
+                "extournée, ou hors comptes d'immobilisation 21 à 27)."
+            )
+        return ligne
+
+    def _generer_plan_exercices_existants(
+        self, immobilisation: Immobilisation, *, auteur_id: uuid.UUID
+    ) -> tuple[int, str | None]:
+        """Une ligne de plan par exercice existant à partir de la mise en
+        service, tant qu'ils sont ouverts et que le bien n'est pas amorti.
+        S'arrête (avec un avertissement) au premier exercice clôturé : sauter
+        un exercice fausserait le cumul."""
+        nombre = 0
+        for exercice in self.exercices.lister():
+            if exercice.date_fin < immobilisation.date_mise_en_service:
+                continue
+            if exercice.statut != StatutExercice.OUVERT.value:
+                return nombre, (
+                    f"L'exercice {exercice.date_debut} → {exercice.date_fin} est clôturé : le plan "
+                    "d'amortissement n'a pas été généré à partir de cet exercice."
+                )
+            try:
+                self.generer_ligne_amortissement(immobilisation.id, exercice.id, auteur_id=auteur_id)
+            except ValidationMetier:
+                break  # totalement amorti
+            nombre += 1
+        return nombre, None
+
+    @staticmethod
+    def _suggerer_compte_amortissement(numero: str, comptes: dict) -> Compte | None:
+        """211 → 2811, 244 → 2844... : on tente « 28 » + la fin du numéro,
+        puis des numéros de plus en plus courts, et on garde le premier
+        compte de classe 2 qui existe dans le plan."""
+        essais: list[str] = []
+        for base in ("28" + numero[1:], "28" + numero[2:]):
+            for longueur in range(len(base), 2, -1):
+                essais.append(base[:longueur])
+        for essai in essais:
+            compte = comptes.get(essai)
+            if compte is not None and compte.classe == CLASSE_COMPTE_IMMOBILISATION:
+                return compte
+        return None
+
+    @staticmethod
+    def _suggerer_compte_dotation(numero: str, comptes: dict) -> Compte | None:
+        """6812 (incorporelles, 21x) ou 6813 (corporelles) ; à défaut, le
+        premier compte 681."""
+        voulu = "6812" if numero.startswith("21") else "6813"
+        candidats = sorted(n for n in comptes if n.startswith(voulu)) or sorted(
+            n for n in comptes if n.startswith("681")
+        )
+        return comptes[candidats[0]] if candidats else None
 
     # --- Plan d'amortissement ------------------------------------------------
 

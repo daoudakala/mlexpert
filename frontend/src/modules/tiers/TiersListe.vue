@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { useAuth } from "@/core/auth/useAuth";
+import { useComptesEntreprise } from "@/modules/comptabilite/api";
 import BaseDataTable, { type ColonneTable } from "@/core/ui/BaseDataTable.vue";
 import StatutBadge from "@/core/ui/StatutBadge.vue";
 import { useListeTiers, type FiltresTiers } from "./api";
@@ -26,10 +27,21 @@ watch(
 );
 const { data: tiers, isLoading } = useListeTiers(entrepriseId, filtres);
 
+// Numéro du compte de regroupement affiché dans la liste.
+const { data: comptes } = useComptesEntreprise(entrepriseId, computed(() => ({ limite: 5000 })));
+const numeroCompte = computed(() => new Map((comptes.value ?? []).map((c) => [c.id, c.numero])));
+
+function comptesDuTiers(t: Tiers): string {
+  return [t.compte_collectif_client_id, t.compte_collectif_fournisseur_id]
+    .filter((id): id is string => !!id)
+    .map((id) => numeroCompte.value.get(id) ?? "—")
+    .join(" / ");
+}
+
 const colonnes: ColonneTable<Tiers>[] = [
   { cle: "code", libelle: "Code" },
   { cle: "raison_sociale", libelle: "Raison sociale" },
-  { cle: "nif", libelle: "NIF" },
+  { cle: "compte_collectif_client_id", libelle: "Compte de regroupement" },
   { cle: "est_client", libelle: "Rôle" },
   { cle: "actif", libelle: "Statut" },
 ];
@@ -74,6 +86,9 @@ function ouvrir(ligne: Tiers): void {
       message-vide="Aucun tiers pour le moment."
       @ligne-cliquee="ouvrir"
     >
+      <template #cell-compte_collectif_client_id="{ ligne }">
+        <span class="font-mono text-xs text-text">{{ comptesDuTiers(ligne) }}</span>
+      </template>
       <template #cell-est_client="{ ligne }">
         <span class="text-text">
           {{ [ligne.est_client && "Client", ligne.est_fournisseur && "Fournisseur"].filter(Boolean).join(" / ") }}

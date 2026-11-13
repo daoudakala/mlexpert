@@ -18,7 +18,9 @@ from app.api.deps import ContexteEntreprise, exiger_permission
 from app.core.database import get_db
 from app.modules.dashboards.export import exporter_etats_financiers
 from app.modules.dashboards.balance import ServiceBalance, exporter_balance
+from app.modules.dashboards.grand_livre import ServiceGrandLivre, exporter_grand_livre
 from app.modules.dashboards.schemas import (
+    GrandLivreGeneralLecture,
     BalanceDetailleeLecture,
     BilanLecture,
     CompteResultatDetailleLecture,
@@ -313,6 +315,72 @@ def exporter_balance_detaillee(
     )
     contenu = exporter_balance(entreprise=entreprise, exercice=exercice, balance=balance)
     nom_fichier = f"balance_generale_{balance.date_fin:%Y%m%d}.xlsx"
+    return Response(
+        content=contenu,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
+    )
+
+
+@router.get(
+    "/entreprises/{entreprise_id}/exercices/{exercice_id}/grand-livre-general",
+    response_model=GrandLivreGeneralLecture,
+)
+def lire_grand_livre_general(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    compte_debut: str | None = None,
+    compte_fin: str | None = None,
+    journal_id: uuid.UUID | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> GrandLivreGeneralLecture:
+    """Grand livre de tous les comptes (ou d'une plage de comptes), avec
+    solde cumulé — voir `dashboards/grand_livre.py`."""
+    service = ServiceGrandLivre(db, contexte.entreprise_id)
+    return GrandLivreGeneralLecture.model_validate(
+        service.grand_livre_general(
+            exercice_id,
+            date_debut=date_debut,
+            date_fin=date_fin,
+            compte_debut=compte_debut,
+            compte_fin=compte_fin,
+            journal_id=journal_id,
+        )
+    )
+
+
+@router.get("/entreprises/{entreprise_id}/exercices/{exercice_id}/grand-livre-general/export")
+def exporter_grand_livre_general(
+    entreprise_id: uuid.UUID,
+    exercice_id: uuid.UUID,
+    date_debut: date | None = None,
+    date_fin: date | None = None,
+    compte_debut: str | None = None,
+    compte_fin: str | None = None,
+    journal_id: uuid.UUID | None = None,
+    contexte: ContexteEntreprise = Depends(exiger_permission("dashboard.consulter")),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Export Excel du grand livre, avec les mêmes filtres que l'écran."""
+    entreprise = RepositoryEntreprises(db).obtenir(contexte.entreprise_id)
+    if entreprise is None:
+        raise RessourceIntrouvable("Entreprise introuvable.")
+    exercice = RepositoryExercice(db, contexte.entreprise_id).obtenir(exercice_id)
+    if exercice is None:
+        raise RessourceIntrouvable("Exercice introuvable pour cette entreprise.")
+    grand_livre = ServiceGrandLivre(db, contexte.entreprise_id).grand_livre_general(
+        exercice_id,
+        date_debut=date_debut,
+        date_fin=date_fin,
+        compte_debut=compte_debut,
+        compte_fin=compte_fin,
+        journal_id=journal_id,
+    )
+    contenu = exporter_grand_livre(entreprise=entreprise, exercice=exercice, grand_livre=grand_livre)
+    nom_fichier = f"grand_livre_{grand_livre.date_fin:%Y%m%d}.xlsx"
     return Response(
         content=contenu,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

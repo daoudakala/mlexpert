@@ -11,7 +11,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { apiClient } from "@/core/api/client";
 import type { EcritureLecture } from "@/modules/comptabilite/types";
 import type {
+  AcquisitionAConfirmer,
   CessionDemande,
+  ConfirmationAcquisition,
+  ConfirmationAcquisitionResultat,
   GenerationEcritureDemande,
   Immobilisation,
   ImmobilisationCreation,
@@ -156,4 +159,49 @@ export function useMutationsImmobilisations(entrepriseId: Ref<string | null | un
   });
 
   return { creer, modifier, genererLigneAmortissement, genererEcritureAmortissement, ceder, reformer };
+}
+
+// --- Reprise automatique des acquisitions (comptes 21 à 27) ------------------
+
+/** Lignes d'écriture validées débitant un compte 21-27, sans fiche d'immobilisation. */
+export function useAcquisitionsAConfirmer(entrepriseId: Ref<string | null | undefined>) {
+  return useQuery({
+    queryKey: computed(() => ["acquisitions-a-confirmer", entrepriseId.value]),
+    queryFn: async () => {
+      const { data } = await apiClient.get<AcquisitionAConfirmer[]>(
+        `${racine(entrepriseId)}/acquisitions-a-confirmer`,
+      );
+      return data;
+    },
+    enabled: () => !!entrepriseId.value,
+  });
+}
+
+export function useMutationsAcquisitions(entrepriseId: Ref<string | null | undefined>) {
+  const queryClient = useQueryClient();
+  const invalider = () => {
+    queryClient.invalidateQueries({ queryKey: ["acquisitions-a-confirmer"] });
+    queryClient.invalidateQueries({ queryKey: ["immobilisations"] });
+    queryClient.invalidateQueries({ queryKey: ["lignes-amortissement"] });
+  };
+
+  const confirmer = useMutation({
+    mutationFn: async ({ ligneId, donnees }: { ligneId: string; donnees: ConfirmationAcquisition }) => {
+      const { data } = await apiClient.post<ConfirmationAcquisitionResultat>(
+        `${racine(entrepriseId)}/acquisitions-a-confirmer/${ligneId}/confirmer`,
+        donnees,
+      );
+      return data;
+    },
+    onSuccess: invalider,
+  });
+
+  const ignorer = useMutation({
+    mutationFn: async (ligneId: string) => {
+      await apiClient.post(`${racine(entrepriseId)}/acquisitions-a-confirmer/${ligneId}/ignorer`);
+    },
+    onSuccess: invalider,
+  });
+
+  return { confirmer, ignorer };
 }

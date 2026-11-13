@@ -6,7 +6,7 @@ import { useAuth } from "@/core/auth/useAuth";
 import BaseDataTable, { type ColonneTable } from "@/core/ui/BaseDataTable.vue";
 import { formaterMontant } from "@/core/ui/formatage";
 import StatutBadge from "@/core/ui/StatutBadge.vue";
-import { useListeImmobilisations } from "./api";
+import { useAcquisitionsAConfirmer, useListeImmobilisations } from "./api";
 import type { Immobilisation } from "./types";
 
 const router = useRouter();
@@ -15,6 +15,7 @@ const entrepriseId = computed(() => contexteActif.value?.entreprise.id);
 
 const statut = ref<string | null>(null);
 const { data: immobilisations, isLoading } = useListeImmobilisations(entrepriseId, statut);
+const { data: aConfirmer } = useAcquisitionsAConfirmer(entrepriseId);
 
 const colonnes: ColonneTable<Immobilisation>[] = [
   { cle: "libelle", libelle: "Libellé" },
@@ -52,6 +53,15 @@ const tonalitesStatut: Record<string, "succes" | "info" | "neutre"> = {
         Nouvelle immobilisation
       </router-link>
     </div>
+
+    <router-link
+      v-if="aConfirmer && aConfirmer.length > 0 && aPermission('immobilisation.creer')"
+      :to="{ name: 'immobilisations.a-confirmer' }"
+      class="block rounded-lg border border-warning bg-warning-bg px-4 py-3 text-sm text-text"
+    >
+      {{ aConfirmer.length }} acquisition(s) saisie(s) en comptabilité (comptes 21 à 27) attendent d'être
+      reprises en immobilisation — <span class="font-medium text-primary">les confirmer</span>.
+    </router-link>
 
     <select v-model="statut" class="rounded-md border border-border px-3 py-2 text-sm text-text">
       <option :value="null">Tous les statuts</option>

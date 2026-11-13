@@ -132,6 +132,100 @@ class RepositoryReporting:
         )
         return list(self.db.execute(requete).all())
 
+    def _filtre_comptes_journal(self, requete, *, compte_debut, compte_fin, journal_id):
+        """Filtres communs au grand livre général : plage de numéros de
+        compte (bornes incluses ; `compte_fin` couvre aussi les comptes dont
+        le numéro commence par elle, ex. « 41 » inclut 411000) et journal."""
+        if compte_debut:
+            requete = requete.where(Compte.numero >= compte_debut)
+        if compte_fin:
+            requete = requete.where(Compte.numero <= compte_fin + "~")
+        if journal_id is not None:
+            requete = requete.where(Ecriture.journal_id == journal_id)
+        return requete
+
+    def lignes_grand_livre_general(
+        self,
+        exercice_id: uuid.UUID,
+        *,
+        date_debut: date,
+        date_fin: date,
+        compte_debut: str | None = None,
+        compte_fin: str | None = None,
+        journal_id: uuid.UUID | None = None,
+    ) -> list[tuple]:
+        """(compte_id, numero_compte, libelle_compte, ligne_id, ecriture_id,
+        date_ecriture, code_journal, numero_ecriture, libelle_ligne,
+        libelle_ecriture, debit, credit, code_lettrage) de toutes les lignes
+        de la période, triées par compte puis par date ; écritures validées
+        uniquement, TOUS journaux (le report à nouveau y figure aussi)."""
+        requete = (
+            select(
+                Compte.id,
+                Compte.numero,
+                Compte.libelle,
+                LigneEcriture.id,
+                Ecriture.id,
+                Ecriture.date_ecriture,
+                Journal.code,
+                Ecriture.numero,
+                LigneEcriture.libelle,
+                Ecriture.libelle,
+                LigneEcriture.debit,
+                LigneEcriture.credit,
+                LigneEcriture.code_lettrage,
+            )
+            .select_from(LigneEcriture)
+            .join(Ecriture, LigneEcriture.ecriture_id == Ecriture.id)
+            .join(Journal, Ecriture.journal_id == Journal.id)
+            .join(Compte, LigneEcriture.compte_id == Compte.id)
+            .where(
+                Ecriture.entreprise_id == self.entreprise_id,
+                Ecriture.exercice_id == exercice_id,
+                Ecriture.statut == StatutEcriture.VALIDEE.value,
+                Ecriture.date_ecriture >= date_debut,
+                Ecriture.date_ecriture <= date_fin,
+            )
+            .order_by(Compte.numero, Ecriture.date_ecriture, Ecriture.numero, LigneEcriture.id)
+        )
+        requete = self._filtre_comptes_journal(
+            requete, compte_debut=compte_debut, compte_fin=compte_fin, journal_id=journal_id
+        )
+        return list(self.db.execute(requete).all())
+
+    def soldes_anterieurs_grand_livre(
+        self,
+        exercice_id: uuid.UUID,
+        *,
+        avant: date,
+        compte_debut: str | None = None,
+        compte_fin: str | None = None,
+        journal_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, Decimal]:
+        """{compte_id: solde (débit − crédit)} des écritures validées de
+        l'exercice datées AVANT `avant` — point de départ du solde cumulé
+        quand la période demandée ne commence pas au début de l'exercice."""
+        requete = (
+            select(
+                Compte.id,
+                func.coalesce(func.sum(LigneEcriture.debit - LigneEcriture.credit), 0),
+            )
+            .select_from(LigneEcriture)
+            .join(Ecriture, LigneEcriture.ecriture_id == Ecriture.id)
+            .join(Compte, LigneEcriture.compte_id == Compte.id)
+            .where(
+                Ecriture.entreprise_id == self.entreprise_id,
+                Ecriture.exercice_id == exercice_id,
+                Ecriture.statut == StatutEcriture.VALIDEE.value,
+                Ecriture.date_ecriture < avant,
+            )
+            .group_by(Compte.id)
+        )
+        requete = self._filtre_comptes_journal(
+            requete, compte_debut=compte_debut, compte_fin=compte_fin, journal_id=journal_id
+        )
+        return {compte_id: solde for compte_id, solde in self.db.execute(requete).all()}
+
     def totaux_par_classe(self, exercice_id: uuid.UUID, classes: tuple[int, ...]) -> dict[int, tuple[Decimal, Decimal]]:
         """{classe: (total_debit, total_credit)} pour les classes
         demandées — sert au compte de résultat sommaire (classes 6 et 7)."""

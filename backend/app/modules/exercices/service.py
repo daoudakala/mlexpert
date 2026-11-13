@@ -15,8 +15,9 @@ Les contrôles de fond sur les écritures elles-mêmes (section 8.5 :
 de ses périodes.
 """
 
+import calendar
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,12 @@ from app.modules.exercices.models import Exercice, Periode, StatutExercice, Stat
 from app.modules.exercices.repository import RepositoryExercice, RepositoryPeriode
 from app.modules.journal_activite.models import TypeAction
 from app.modules.journal_activite.service import ServiceJournalActivite
+
+
+MOIS_FR = [
+    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+]
 
 
 class ServiceExercices:
@@ -183,6 +190,42 @@ class ServiceExercices:
         )
         return periode
 
+    def generer_periodes_mensuelles(
+        self, exercice_id: uuid.UUID, *, auteur_id: uuid.UUID
+    ) -> list[Periode]:
+        """Crée les mois de travail manquants de l'exercice (un par mois
+        civil, le premier et le dernier étant tronqués aux bornes de
+        l'exercice). Idempotent : un mois qui chevauche déjà une période
+        existante est sauté. Renvoie les périodes créées."""
+        exercice = self._obtenir_exercice_ou_lever(exercice_id)
+        creees: list[Periode] = []
+        debut = exercice.date_debut
+        while debut <= exercice.date_fin:
+            fin_mois = date(debut.year, debut.month, calendar.monthrange(debut.year, debut.month)[1])
+            fin = min(fin_mois, exercice.date_fin)
+            if fin > debut and not self.periodes.chevauche(exercice_id, debut, fin):
+                periode = Periode(
+                    exercice_id=exercice_id,
+                    libelle=f"{MOIS_FR[debut.month - 1]} {debut.year}",
+                    date_debut=debut,
+                    date_fin=fin,
+                    statut=StatutPeriode.OUVERTE.value,
+                )
+                self.periodes.ajouter(periode)
+                creees.append(periode)
+            debut = fin + timedelta(days=1)
+        if creees:
+            self.journal.enregistrer(
+                module="exercices",
+                type_action=TypeAction.CREER,
+                utilisateur_id=auteur_id,
+                entreprise_id=self.entreprise_id,
+                type_objet="Periode",
+                description=f"Génération de {len(creees)} mois de travail pour l'exercice {exercice.date_debut} → {exercice.date_fin}.",
+                valeurs_apres={"nombre": len(creees)},
+            )
+        return creees
+
     def cloturer_periode(self, periode_id: uuid.UUID, *, auteur_id: uuid.UUID) -> None:
         periode = self._obtenir_periode_ou_lever(periode_id)
         if periode.statut == StatutPeriode.CLOTUREE.value:
@@ -223,7 +266,7 @@ class ServiceExercices:
         )
 
     def lister_periodes(self, exercice_id: uuid.UUID) -> list[Periode]:
-        return self.periodes.lister_pour_exercice(exercice_id)
+        return sorted(self.periodes.lister_pour_exercice(exercice_id), key=lambda p: p.date_debut)
 
     # --- Aides internes ---------------------------------------------------
 

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AccesRefuse, Conflit, RessourceIntrouvable, ValidationMetier
@@ -72,10 +73,11 @@ from app.modules.comptabilite.repository import (
 )
 from app.modules.dashboards.repository import RepositoryReporting
 from app.modules.entreprises.repository import RepositoryEntreprises
-from app.modules.exercices.models import Exercice, StatutExercice
-from app.modules.exercices.repository import RepositoryExercice
+from app.modules.exercices.models import Exercice, StatutExercice, StatutPeriode
+from app.modules.exercices.repository import RepositoryExercice, RepositoryPeriode
 from app.modules.journal_activite.models import TypeAction
 from app.modules.journal_activite.service import ServiceJournalActivite
+from app.modules.tiers.models import Tiers
 from app.modules.tiers.repository import RepositoryTiers
 
 
@@ -146,11 +148,21 @@ class ResultatGenerationEcheances:
 def _decimal_importee(valeur: str) -> Decimal:
     """Un montant tel qu'il arrive d'un fichier importé : chaîne vide ou
     blanche -> zéro (une ligne de débit n'a pas de valeur en colonne
-    crédit, et réciproquement) ; virgule tolérée comme séparateur
-    décimal, en plus du point."""
-    nettoyee = (valeur or "").strip().replace(" ", "").replace(",", ".")
+    crédit, et réciproquement). Tolère les espaces (y compris insécables)
+    comme séparateur de milliers, et la virgule OU le point comme séparateur
+    décimal : « 1 234,56 », « 1.234,56 », « 1,234.56 » et « 1234.56 » donnent
+    tous 1234.56 (quand les deux signes sont présents, le dernier est le
+    séparateur décimal)."""
+    nettoyee = (valeur or "").replace("\u00a0", "").replace("\u202f", "").replace(" ", "").strip()
     if not nettoyee:
         return Decimal("0")
+    if "," in nettoyee and "." in nettoyee:
+        if nettoyee.rfind(",") > nettoyee.rfind("."):
+            nettoyee = nettoyee.replace(".", "").replace(",", ".")
+        else:
+            nettoyee = nettoyee.replace(",", "")
+    else:
+        nettoyee = nettoyee.replace(",", ".")
     try:
         return Decimal(nettoyee)
     except InvalidOperation:
@@ -188,8 +200,8 @@ def _prochaine_echeance(date_actuelle: date, periodicite: str, *, jour_ancre: in
 
 
 def _valider_classe(classe: int) -> None:
-    if not 1 <= classe <= 8:
-        raise ValidationMetier("La classe d'un compte doit être comprise entre 1 et 8.")
+    if not 1 <= classe <= 9:
+        raise ValidationMetier("La classe d'un compte doit être comprise entre 1 et 9.")
 
 
 def _valider_coherence_collectif(*, est_collectif: bool, lettrable: bool) -> None:
@@ -400,6 +412,11 @@ class ServiceComptabilite:
         self.recurrentes = RepositoryEcrituresRecurrentes(db, entreprise_id)
         self.lignes_recurrentes = RepositoryLignesEcritureRecurrente(db, entreprise_id)
         self.exercices = RepositoryExercice(db, entreprise_id)
+        self.periodes = RepositoryPeriode(db, entreprise_id)
+        # Vrai uniquement pendant la génération/régénération du report à
+        # nouveau (voir `generer_a_nouveaux`) : seule voie autorisée à écrire
+        # dans le journal RAN.
+        self._ran_interne = False
         self.tiers = RepositoryTiers(db, entreprise_id)
         self.entreprises = RepositoryEntreprises(db)
         self.journal_activite = ServiceJournalActivite(db)
@@ -418,7 +435,7 @@ class ServiceComptabilite:
         """Le plan comptable applicable : comptes globaux + extensions de
         cette entreprise. `recherche` filtre sur le numéro OU le libellé
         (`ILIKE`, insensible à la casse), `classe` sur la classe SYSCOHADA
-        exacte (1 à 8 — pas de validation de la borne ici, un filtre hors
+        exacte (1 à 9 — pas de validation de la borne ici, un filtre hors
         borne renvoie simplement une liste vide) — utilisés par l'écran de
         recherche du plan comptable ; `limite`/`decalage` en pagination
         simple (page suivante/précédente, pas de total — même choix que
@@ -505,7 +522,7 @@ class ServiceComptabilite:
         compte via `creer_extension_compte` si besoin — il n'existe pas de
         route de modification d'un compte existant (voir models.py).
 
-        Une ligne invalide (numéro/libellé manquant, numéro hors 1-8, ou
+        Une ligne invalide (numéro/libellé manquant, numéro hors 1-9, ou
         déjà pris) est ignorée et reportée, jamais fatale pour le reste du
         fichier. Les lignes sont traitées des numéros les plus courts aux
         plus longs, pour que le parent d'un compte soit toujours déjà créé
@@ -528,12 +545,12 @@ class ServiceComptabilite:
                     CompteImportIgnore(numero=numero, libelle=libelle, raison="Numéro ou libellé manquant.")
                 )
                 continue
-            if not numero[0].isdigit() or not (1 <= int(numero[0]) <= 8):
+            if not numero[0].isdigit() or not (1 <= int(numero[0]) <= 9):
                 ignores.append(
                     CompteImportIgnore(
                         numero=numero,
                         libelle=libelle,
-                        raison="Le numéro doit commencer par un chiffre de 1 à 8 (classe SYSCOHADA).",
+                        raison="Le numéro doit commencer par un chiffre de 1 à 9 (classe SYSCOHADA).",
                     )
                 )
                 continue
@@ -686,6 +703,69 @@ class ServiceComptabilite:
             description=f"Désactivation du sous-compte {compte.numero}.",
             valeurs_avant={"actif": True},
             valeurs_apres={"actif": False},
+        )
+
+    def supprimer_extension_compte(self, compte_id: uuid.UUID, *, auteur_id: uuid.UUID) -> None:
+        """Suppression définitive d'une extension de CETTE entreprise (jamais
+        d'un compte du référentiel global). Refusée dès que le compte est
+        utilisé quelque part : une ligne d'écriture (brouillon ou validée),
+        un sous-compte, un tiers (compte de regroupement), un modèle
+        d'écriture ou une écriture récurrente. Dans ce cas, la seule option
+        est la désactivation, qui conserve l'historique."""
+        compte = self._obtenir_extension_ou_lever(compte_id)
+
+        def _compter(requete) -> int:
+            return int(self.db.scalar(requete) or 0)
+
+        nb_lignes = _compter(
+            select(func.count(LigneEcriture.id)).where(
+                LigneEcriture.entreprise_id == self.entreprise_id,
+                LigneEcriture.compte_id == compte.id,
+            )
+        )
+        if nb_lignes:
+            raise ValidationMetier(
+                f"Le compte {compte.numero} est utilisé dans {nb_lignes} ligne(s) d'écriture : "
+                "il ne peut pas être supprimé. Désactivez-le plutôt."
+            )
+        if _compter(select(func.count(Compte.id)).where(Compte.compte_parent_id == compte.id)):
+            raise ValidationMetier(
+                f"Le compte {compte.numero} possède des sous-comptes : supprimez-les d'abord."
+            )
+        if _compter(
+            select(func.count(Tiers.id)).where(
+                Tiers.entreprise_id == self.entreprise_id,
+                (Tiers.compte_collectif_client_id == compte.id)
+                | (Tiers.compte_collectif_fournisseur_id == compte.id),
+            )
+        ):
+            raise ValidationMetier(
+                f"Le compte {compte.numero} est le compte de regroupement d'un ou plusieurs tiers."
+            )
+        if _compter(
+            select(func.count(LigneModeleEcriture.id)).where(LigneModeleEcriture.compte_id == compte.id)
+        ) or _compter(
+            select(func.count(LigneEcritureRecurrente.id)).where(
+                LigneEcritureRecurrente.compte_id == compte.id
+            )
+        ):
+            raise ValidationMetier(
+                f"Le compte {compte.numero} est utilisé dans un modèle d'écriture ou une "
+                "écriture récurrente."
+            )
+
+        numero, libelle = compte.numero, compte.libelle
+        self.db.delete(compte)
+        self.db.flush()
+        self.journal_activite.enregistrer(
+            module="comptabilite",
+            type_action=TypeAction.SUPPRIMER,
+            utilisateur_id=auteur_id,
+            entreprise_id=self.entreprise_id,
+            type_objet="Compte",
+            objet_id=compte_id,
+            description=f"Suppression du compte {numero} — {libelle}.",
+            valeurs_avant={"numero": numero, "libelle": libelle},
         )
 
     # --- Journaux ------------------------------------------------------------
@@ -1178,9 +1258,11 @@ class ServiceComptabilite:
         journal = self._obtenir_journal_ou_lever(journal_id)
         if not journal.actif:
             raise ValidationMetier("Ce journal est désactivé.")
+        self._verifier_ran_non_modifiable(journal)
         exercice = self._obtenir_exercice_ou_lever(exercice_id)
         self._verifier_exercice_ouvert(exercice)
         self._verifier_date_dans_exercice(date_ecriture, exercice)
+        self._verifier_mois_ouvert(journal, date_ecriture, exercice_id)
         self._valider_lignes(lignes)
 
         ecriture = Ecriture(
@@ -1278,10 +1360,14 @@ class ServiceComptabilite:
     ) -> Ecriture:
         ecriture = self._obtenir_ecriture_ou_lever(ecriture_id)
         self._verifier_brouillon(ecriture)
+        journal = self._obtenir_journal_ou_lever(ecriture.journal_id)
+        self._verifier_ran_non_modifiable(journal)
 
         if date_ecriture is not None or lignes is not None:
             exercice = self._obtenir_exercice_ou_lever(ecriture.exercice_id)
-            self._verifier_date_dans_exercice(date_ecriture or ecriture.date_ecriture, exercice)
+            date_cible = date_ecriture or ecriture.date_ecriture
+            self._verifier_date_dans_exercice(date_cible, exercice)
+            self._verifier_mois_ouvert(journal, date_cible, ecriture.exercice_id)
         if lignes is not None:
             self._valider_lignes(lignes)
 
@@ -1310,6 +1396,7 @@ class ServiceComptabilite:
     def supprimer_ecriture(self, ecriture_id: uuid.UUID, *, auteur_id: uuid.UUID) -> None:
         ecriture = self._obtenir_ecriture_ou_lever(ecriture_id)
         self._verifier_brouillon(ecriture)
+        self._verifier_ran_non_modifiable(self._obtenir_journal_ou_lever(ecriture.journal_id))
         self.db.delete(ecriture)  # les lignes suivent par ondelete=CASCADE
         self.db.flush()
         self.journal_activite.enregistrer(
@@ -1331,7 +1418,30 @@ class ServiceComptabilite:
     # de sens comptable.
     CLASSES_BILAN = (1, 2, 3, 4, 5)
 
-    def generer_a_nouveaux(self, exercice_id: uuid.UUID, *, auteur_id: uuid.UUID) -> Ecriture:
+    def generer_a_nouveaux(
+        self,
+        exercice_id: uuid.UUID,
+        *,
+        auteur_id: uuid.UUID,
+        regenerer: bool = False,
+        motif: str | None = None,
+    ) -> Ecriture:
+        """Voir `_generer_a_nouveaux`. `regenerer=True` (avec un `motif`
+        obligatoire) extourne les à-nouveaux déjà générés puis en crée de
+        nouveaux ; l'opération est tracée dans le journal d'activité."""
+        if regenerer and not (motif and len(motif.strip()) >= 5):
+            raise ValidationMetier("Un motif (5 caractères minimum) est obligatoire pour régénérer.")
+        self._ran_interne = True
+        try:
+            return self._generer_a_nouveaux(
+                exercice_id, auteur_id=auteur_id, regenerer=regenerer, motif=(motif or "").strip()
+            )
+        finally:
+            self._ran_interne = False
+
+    def _generer_a_nouveaux(
+        self, exercice_id: uuid.UUID, *, auteur_id: uuid.UUID, regenerer: bool, motif: str
+    ) -> Ecriture:
         """Crée et valide une écriture qui reporte, compte par compte, le
         solde de clôture des comptes de bilan de l'exercice précédent vers
         l'exercice `exercice_id` — dans un journal dédié ('AN'), créé à la
@@ -1363,8 +1473,39 @@ class ServiceComptabilite:
             self.journaux.ajouter(journal)
 
         deja_generees = self.ecritures.lister(journal_id=journal.id, exercice_id=exercice_id, limite=1)
-        if deja_generees:
-            raise Conflit("Les à-nouveaux de cet exercice ont déjà été générés.")
+        if deja_generees and not regenerer:
+            raise Conflit(
+                "Les à-nouveaux de cet exercice ont déjà été générés. Pour les refaire, "
+                "utilise la régénération (motif obligatoire, opération tracée)."
+            )
+        if regenerer:
+            if not deja_generees:
+                raise ValidationMetier("Aucun à-nouveau généré à régénérer pour cet exercice.")
+            for ancienne in self.ecritures.lister(
+                journal_id=journal.id, exercice_id=exercice_id, limite=1000
+            ):
+                if ancienne.ecriture_extournee_id is not None:
+                    continue
+                if ancienne.statut != StatutEcriture.VALIDEE.value:
+                    continue
+                if self.lister_extournant(ancienne.id):
+                    continue
+                extourne = self.extourner_ecriture(
+                    ancienne.id,
+                    auteur_id=auteur_id,
+                    date_ecriture=exercice.date_debut,
+                    libelle=f"Annulation des à-nouveaux (régénération) — {motif}",
+                )
+                self.valider_ecriture(extourne.id, auteur_id=auteur_id)
+            self.journal_activite.enregistrer(
+                module="comptabilite",
+                type_action=TypeAction.ANNULER,
+                utilisateur_id=auteur_id,
+                entreprise_id=self.entreprise_id,
+                type_objet="Ecriture",
+                description=f"Régénération des à-nouveaux de l'exercice {exercice.date_debut} — motif : {motif}",
+                valeurs_apres={"exercice_id": str(exercice_id), "motif": motif},
+            )
 
         reporting = RepositoryReporting(self.db, self.entreprise_id)
         lignes: list[LigneSaisie] = []
@@ -1392,7 +1533,10 @@ class ServiceComptabilite:
             journal_id=journal.id,
             exercice_id=exercice_id,
             date_ecriture=exercice.date_debut,
-            libelle=f"À-nouveaux — report de l'exercice {precedent.date_debut.year}",
+            libelle=(
+                f"À-nouveaux — report de l'exercice {precedent.date_debut.year}"
+                + (" (régénéré)" if regenerer else "")
+            ),
             lignes=lignes,
         )
         return self.valider_ecriture(ecriture.id, auteur_id=auteur_id)
@@ -1410,6 +1554,7 @@ class ServiceComptabilite:
         exercice = self._obtenir_exercice_ou_lever(ecriture.exercice_id)
         self._verifier_exercice_ouvert(exercice)
         journal = self._obtenir_journal_ou_lever(ecriture.journal_id)
+        self._verifier_mois_ouvert(journal, ecriture.date_ecriture, ecriture.exercice_id)
 
         # Voir la note de tête de fichier sur la limite de concurrence de
         # ce calcul de numéro.
@@ -1499,8 +1644,11 @@ class ServiceComptabilite:
                 "brouillon se modifie ou se supprime directement."
             )
 
+        journal = self._obtenir_journal_ou_lever(originale.journal_id)
+        self._verifier_ran_non_modifiable(journal)
         exercice = self._obtenir_exercice_ou_lever(originale.exercice_id)
         self._verifier_date_dans_exercice(date_ecriture, exercice)
+        self._verifier_mois_ouvert(journal, date_ecriture, originale.exercice_id)
 
         lignes_originales = self.lignes_ecriture.lister_pour_ecriture(originale.id)
         nouvelle = Ecriture(
@@ -1666,6 +1814,127 @@ class ServiceComptabilite:
             valeurs_avant={"code_lettrage": code_lettrage},
         )
 
+    # --- Journaux de caisse / banque : récapitulatif d'un mois ----------------
+
+    def resume_journal_tresorerie(
+        self, journal_id: uuid.UUID, *, date_debut: date, date_fin: date
+    ) -> dict:
+        """Solde initial, total des débits, total des crédits et solde final
+        d'un journal de caisse ou de banque sur [date_debut, date_fin]
+        (écritures validées uniquement).
+
+        Périmètre : les comptes de trésorerie (classe 5) mouvementés par ce
+        journal. Solde initial = à-nouveaux de l'exercice sur ces comptes +
+        mouvements de ce journal depuis le début de l'exercice jusqu'à la
+        veille de la période. Le solde est exprimé en débit − crédit
+        (positif = débiteur)."""
+        journal = self._obtenir_journal_ou_lever(journal_id)
+        if journal.type_journal not in (TypeJournal.BANQUE.value, TypeJournal.CAISSE.value):
+            raise ValidationMetier("Le récapitulatif ne concerne que les journaux de caisse et de banque.")
+        if date_fin < date_debut:
+            raise ValidationMetier("La date de fin précède la date de début.")
+        exercice = self.exercices.obtenir_pour_date(date_debut)
+        if exercice is None:
+            raise ValidationMetier(f"Aucun exercice ne couvre la date {date_debut.isoformat()}.")
+
+        valide = StatutEcriture.VALIDEE.value
+        comptes_tresorerie = (
+            select(LigneEcriture.compte_id)
+            .join(Ecriture, Ecriture.id == LigneEcriture.ecriture_id)
+            .join(Compte, Compte.id == LigneEcriture.compte_id)
+            .where(
+                Ecriture.entreprise_id == self.entreprise_id,
+                Ecriture.journal_id == journal_id,
+                Ecriture.statut == valide,
+                Compte.classe == 5,
+            )
+        )
+
+        def _totaux(*conditions):
+            requete = (
+                select(
+                    func.coalesce(func.sum(LigneEcriture.debit), 0),
+                    func.coalesce(func.sum(LigneEcriture.credit), 0),
+                )
+                .join(Ecriture, Ecriture.id == LigneEcriture.ecriture_id)
+                .where(
+                    Ecriture.entreprise_id == self.entreprise_id,
+                    Ecriture.statut == valide,
+                    LigneEcriture.compte_id.in_(comptes_tresorerie),
+                    *conditions,
+                )
+            )
+            d, c = self.db.execute(requete).one()
+            return Decimal(d), Decimal(c)
+
+        # À-nouveaux de l'exercice (journaux de type a_nouveaux).
+        ran_ids = select(Journal.id).where(
+            Journal.entreprise_id == self.entreprise_id,
+            Journal.type_journal == TypeJournal.A_NOUVEAUX.value,
+        )
+        ran_d, ran_c = _totaux(Ecriture.exercice_id == exercice.id, Ecriture.journal_id.in_(ran_ids))
+        av_d, av_c = _totaux(
+            Ecriture.exercice_id == exercice.id,
+            Ecriture.journal_id == journal_id,
+            Ecriture.date_ecriture < date_debut,
+        )
+        solde_initial = (ran_d - ran_c) + (av_d - av_c)
+
+        lignes = self.db.execute(
+            select(
+                Ecriture.date_ecriture,
+                Ecriture.numero,
+                Ecriture.libelle,
+                Compte.numero,
+                LigneEcriture.debit,
+                LigneEcriture.credit,
+                Ecriture.id,
+            )
+            .join(Ecriture, Ecriture.id == LigneEcriture.ecriture_id)
+            .join(Compte, Compte.id == LigneEcriture.compte_id)
+            .where(
+                Ecriture.entreprise_id == self.entreprise_id,
+                Ecriture.statut == valide,
+                Ecriture.journal_id == journal_id,
+                Ecriture.date_ecriture >= date_debut,
+                Ecriture.date_ecriture <= date_fin,
+                LigneEcriture.compte_id.in_(comptes_tresorerie),
+            )
+            .order_by(Ecriture.date_ecriture, Ecriture.numero, Compte.numero)
+        ).all()
+
+        cumul = solde_initial
+        mouvements = []
+        total_debit = Decimal("0")
+        total_credit = Decimal("0")
+        for date_e, numero, libelle, compte_num, debit, credit, ecriture_id in lignes:
+            debit, credit = Decimal(debit), Decimal(credit)
+            total_debit += debit
+            total_credit += credit
+            cumul += debit - credit
+            mouvements.append(
+                {
+                    "ecriture_id": ecriture_id,
+                    "date_ecriture": date_e,
+                    "numero": numero,
+                    "libelle": libelle,
+                    "compte_numero": compte_num,
+                    "debit": debit,
+                    "credit": credit,
+                    "solde_cumule": cumul,
+                }
+            )
+        return {
+            "journal_id": journal_id,
+            "date_debut": date_debut,
+            "date_fin": date_fin,
+            "solde_initial": solde_initial,
+            "total_debit": total_debit,
+            "total_credit": total_credit,
+            "solde_final": solde_initial + total_debit - total_credit,
+            "mouvements": mouvements,
+        }
+
     # --- Aides internes -------------------------------------------------------
 
     def _obtenir_compte_ou_lever(self, compte_id: uuid.UUID) -> Compte:
@@ -1720,6 +1989,39 @@ class ServiceComptabilite:
         if entreprise is not None and not entreprise.blocage_ecritures_cloture:
             return
         raise ValidationMetier("Impossible d'agir sur une écriture d'un exercice clôturé.")
+
+    def _verifier_ran_non_modifiable(self, journal: Journal) -> None:
+        """Le journal de report à nouveau n'est alimenté que par la
+        génération (ou régénération tracée) des à-nouveaux : aucune
+        création, modification, suppression ni extourne manuelle."""
+        if journal.type_journal == TypeJournal.A_NOUVEAUX.value and not self._ran_interne:
+            raise ValidationMetier(
+                "Le journal de report à nouveau n'est pas modifiable : ses écritures sont "
+                "générées automatiquement. Utilise la régénération des à-nouveaux (tracée)."
+            )
+
+    def _verifier_mois_ouvert(self, journal: Journal, date_ecriture: date, exercice_id: uuid.UUID) -> None:
+        """Mois de travail : si l'exercice a des périodes, la date doit tomber
+        dans une période OUVERTE. Sans période définie, aucune contrainte
+        (exercices existants). Le journal RAN est hors mois de travail."""
+        if journal.type_journal == TypeJournal.A_NOUVEAUX.value:
+            return
+        periodes = self.periodes.lister_pour_exercice(exercice_id)
+        if not periodes:
+            return
+        couvrante = next(
+            (p for p in periodes if p.date_debut <= date_ecriture <= p.date_fin), None
+        )
+        if couvrante is None:
+            raise ValidationMetier(
+                f"Aucun mois de travail ne couvre le {date_ecriture.isoformat()} : "
+                "crée le mois correspondant avant de saisir."
+            )
+        if couvrante.statut == StatutPeriode.CLOTUREE.value:
+            raise ValidationMetier(
+                f"Le mois {couvrante.libelle or couvrante.date_debut.isoformat()} est clôturé : "
+                "aucune saisie n'est possible."
+            )
 
     def _verifier_date_dans_exercice(self, date_ecriture: date, exercice: Exercice) -> None:
         if date_ecriture < exercice.date_debut or date_ecriture > exercice.date_fin:

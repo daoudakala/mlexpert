@@ -7,6 +7,11 @@
  *     l'enregistrement, l'écriture est validée immédiatement (numéro de
  *     pièce généré par le logiciel) et le formulaire se vide pour enchaîner
  *     sur une nouvelle écriture, sans quitter l'écran.
+ *     Avant toute saisie (sauf journal RAN), on choisit le MOIS DE TRAVAIL
+ *     (période de l'exercice) : la date reste bornée à ce mois, un mois
+ *     clôturé refuse la saisie. Pour un journal de caisse/banque, le solde
+ *     initial, les totaux et le solde final du mois s'affichent. Le journal
+ *     de report à nouveau (RAN) n'est pas saisissable : il est généré.
  *   - brouillon existant : mêmes champs, pré-remplis, modifiables
  *     (modifier_ecriture), avec bouton Valider et Supprimer.
  *   - écriture validée : champs en lecture seule (le backend refuse toute
@@ -18,7 +23,16 @@ import { useRoute, useRouter } from "vue-router";
 
 import { useAuth } from "@/core/auth/useAuth";
 import { messageErreur } from "@/core/api/erreurs";
-import { useComptesEntreprise, useExournantes, useJournaux, useMutationsEcritures, useEcriture } from "./api";
+import {
+  useComptesEntreprise,
+  useEcriture,
+  useExournantes,
+  useJournaux,
+  useMutationGenererMois,
+  useMutationsEcritures,
+  usePeriodesExercice,
+  useResumeJournal,
+} from "./api";
 import type { EcritureDuplication } from "./types";
 import { useExercices } from "@/modules/exercices/api";
 import { useListeTiers } from "@/modules/tiers/api";
@@ -59,6 +73,7 @@ const { data: tiersListe } = useListeTiers(entrepriseId, computed(() => ({ actif
 const { data: extournantes } = useExournantes(entrepriseId, ecritureId);
 
 const { creer, modifier, supprimer, valider, dupliquer, extourner } = useMutationsEcritures(entrepriseId);
+const genererMois = useMutationGenererMois(entrepriseId);
 
 interface LigneFormulaire {
   compte_id: string;
@@ -91,6 +106,95 @@ watch(
     if (trouve) formulaire.journal_id = trouve.id;
   },
   { immediate: true },
+);
+
+// --- Journal courant, mois de travail ---------------------------------------
+
+// Le journal RAN (a_nouveaux) n'est jamais proposé à la saisie.
+const journauxSaisie = computed(() =>
+  enEdition.value ? (journaux.value ?? []) : (journaux.value ?? []).filter((j) => j.type_journal !== "a_nouveaux"),
+);
+const journalCourant = computed(() => (journaux.value ?? []).find((j) => j.id === formulaire.journal_id));
+const estTresorerie = computed(
+  () => journalCourant.value?.type_journal === "banque" || journalCourant.value?.type_journal === "caisse",
+);
+
+function aujourdhui(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const exerciceTravailId = ref("");
+watch(
+  exercices,
+  (liste) => {
+    if (exerciceTravailId.value || !liste || liste.length === 0) return;
+    const jour = aujourdhui();
+    const ouverts = liste.filter((e) => e.statut === "ouvert");
+    const choisi =
+      ouverts.find((e) => e.date_debut <= jour && jour <= e.date_fin) ??
+      ouverts[ouverts.length - 1] ??
+      liste[liste.length - 1];
+    exerciceTravailId.value = choisi.id;
+  },
+  { immediate: true },
+);
+
+const { data: periodes } = usePeriodesExercice(entrepriseId, exerciceTravailId);
+const moisId = ref("");
+const moisChoisi = computed(() => (periodes.value ?? []).find((p) => p.id === moisId.value) ?? null);
+const aDesMois = computed(() => (periodes.value ?? []).length > 0);
+
+// Changement d'exercice : on repart sans mois choisi.
+watch(exerciceTravailId, () => {
+  moisId.value = "";
+});
+// Présélection : le mois ouvert qui contient aujourd'hui, sinon le premier ouvert.
+watch(
+  periodes,
+  (liste) => {
+    if (moisId.value || !liste || liste.length === 0) return;
+    const jour = aujourdhui();
+    const ouvertes = liste.filter((p) => p.statut === "ouverte");
+    const choisi = ouvertes.find((p) => p.date_debut <= jour && jour <= p.date_fin) ?? ouvertes[0];
+    if (choisi) moisId.value = choisi.id;
+  },
+  { immediate: true },
+);
+
+// La date reste cohérente avec le mois choisi.
+watch(moisChoisi, (m) => {
+  if (!m || enEdition.value) return;
+  const d = formulaire.date_ecriture;
+  if (d && d >= m.date_debut && d <= m.date_fin) return;
+  const jour = aujourdhui();
+  formulaire.date_ecriture = jour >= m.date_debut && jour <= m.date_fin ? jour : m.date_debut;
+});
+
+const estRan = computed(() => journalCourant.value?.type_journal === "a_nouveaux");
+const raisonBlocage = computed<string | null>(() => {
+  if (enEdition.value) return null;
+  if (estRan.value) return "Le journal de report à nouveau n'est pas saisissable : il est généré automatiquement.";
+  if (aDesMois.value && !moisChoisi.value) return "Choisis le mois de travail avant de saisir.";
+  if (moisChoisi.value?.statut === "cloturee") return "Ce mois est clôturé : aucune saisie n'est possible.";
+  return null;
+});
+
+async function creerLesMois(): Promise<void> {
+  erreur.value = null;
+  try {
+    await genererMois.mutateAsync(exerciceTravailId.value);
+  } catch (e) {
+    erreur.value = messageErreur(e);
+  }
+}
+
+// Récapitulatif du mois pour un journal de caisse / banque.
+const { data: resume } = useResumeJournal(
+  entrepriseId,
+  computed(() => (estTresorerie.value && !enEdition.value ? formulaire.journal_id : null)),
+  computed(() => moisChoisi.value?.date_debut ?? null),
+  computed(() => moisChoisi.value?.date_fin ?? null),
 );
 
 watch(
@@ -176,6 +280,9 @@ function lignesSaisies() {
 const erreur = ref<string | null>(null);
 // Dernière écriture enregistrée depuis ce formulaire (bandeau de confirmation).
 const derniereEcriture = ref<{ id: string; numero: string | null } | null>(null);
+// Vrai quand la dernière écriture enregistrée débite un compte d'immobilisation
+// (21 à 27) : on propose d'aller la reprendre dans le module Immobilisations.
+const acquisitionDetectee = ref(false);
 
 function reinitialiserSaisie(): void {
   // On garde le journal et la date : on enchaîne souvent plusieurs
@@ -191,6 +298,18 @@ const enEnvoi = computed(() => creer.isPending.value || modifier.isPending.value
 
 async function soumettre(): Promise<void> {
   erreur.value = null;
+  if (raisonBlocage.value) {
+    erreur.value = raisonBlocage.value;
+    return;
+  }
+  if (
+    !enEdition.value &&
+    moisChoisi.value &&
+    (formulaire.date_ecriture < moisChoisi.value.date_debut || formulaire.date_ecriture > moisChoisi.value.date_fin)
+  ) {
+    erreur.value = `La date doit rester dans le mois choisi (${moisChoisi.value.date_debut} → ${moisChoisi.value.date_fin}).`;
+    return;
+  }
   if (formulaire.lignes.some((l) => !l.compte_id)) {
     erreur.value = "Choisis un compte pour chaque ligne.";
     return;
@@ -221,6 +340,10 @@ async function soumettre(): Promise<void> {
         lignes: lignesSaisies(),
       });
       derniereEcriture.value = { id: ecriture.id, numero: ecriture.numero };
+      acquisitionDetectee.value = ecriture.lignes.some((l) => {
+        const numero = comptes.value?.find((c) => c.id === l.compte_id)?.numero ?? "";
+        return Number(l.debit) > 0 && /^2[1-7]/.test(numero);
+      });
       reinitialiserSaisie();
     }
   } catch (e) {
@@ -431,6 +554,91 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
         Voir l'écriture
       </router-link>
     </div>
+    <div
+      v-if="acquisitionDetectee && !enEdition && aPermission('immobilisation.creer')"
+      class="flex items-center justify-between rounded-lg border border-warning bg-warning-bg px-4 py-3 text-sm text-text"
+    >
+      <span>Cette écriture débite un compte d'immobilisation (classe 2) : elle peut être reprise en immobilisation.</span>
+      <router-link :to="{ name: 'immobilisations.a-confirmer' }" class="font-medium text-primary hover:underline">
+        Confirmer l'immobilisation
+      </router-link>
+    </div>
+
+    <!-- Mois de travail (nouvelle écriture uniquement) -->
+    <div v-if="!enEdition && !estRan" class="space-y-3 rounded-lg border border-border bg-surface p-4">
+      <div class="flex flex-wrap items-end gap-3">
+        <div>
+          <label class="mb-1 block text-xs font-medium text-text-muted">Exercice</label>
+          <select v-model="exerciceTravailId" class="rounded-md border border-border px-2 py-1.5 text-sm text-text">
+            <option v-for="e in exercices" :key="e.id" :value="e.id">
+              {{ e.date_debut }} → {{ e.date_fin }}{{ e.statut === "cloture" ? " (clôturé)" : "" }}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label class="mb-1 block text-xs font-medium text-text-muted">Mois de travail</label>
+          <select v-model="moisId" :disabled="!aDesMois" class="rounded-md border border-border px-2 py-1.5 text-sm text-text disabled:opacity-60">
+            <option value="" disabled>— Choisir le mois —</option>
+            <option v-for="p in periodes" :key="p.id" :value="p.id" :disabled="p.statut === 'cloturee'">
+              {{ p.libelle ?? p.date_debut }}{{ p.statut === "cloturee" ? " (clôturé)" : "" }}
+            </option>
+          </select>
+        </div>
+        <button
+          v-if="aPermission('periode.creer') && exerciceTravailId"
+          type="button"
+          :disabled="genererMois.isPending.value"
+          class="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface-muted disabled:opacity-60"
+          @click="creerLesMois"
+        >
+          {{ aDesMois ? "Créer les mois manquants" : "Créer les mois de l'exercice" }}
+        </button>
+      </div>
+      <p v-if="!aDesMois" class="text-xs text-text-muted">
+        Aucun mois défini pour cet exercice : crée-les pour cadrer la saisie. Tant qu'aucun mois n'existe, la
+        saisie reste libre dans l'exercice.
+      </p>
+    </div>
+
+    <div v-if="estRan && !enEdition" class="rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm text-text-muted">
+      Le journal de report à nouveau n'est pas saisissable : ses écritures sont générées automatiquement et ne
+      peuvent être ni ajoutées, ni modifiées, ni supprimées.
+    </div>
+    <p v-else-if="raisonBlocage" class="rounded-lg border border-danger px-4 py-3 text-sm text-danger">
+      {{ raisonBlocage }}
+    </p>
+
+    <!-- Caisse / banque : situation du mois -->
+    <div v-if="estTresorerie && !enEdition && resume" class="rounded-lg border border-border bg-surface p-4">
+      <h2 class="mb-2 text-sm font-semibold text-text">
+        {{ journalCourant?.libelle }} — {{ moisChoisi?.libelle ?? "mois choisi" }}
+      </h2>
+      <dl class="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+        <div><dt class="text-text-muted">Solde initial</dt><dd class="font-medium text-text">{{ formaterMontant(resume.solde_initial) }}</dd></div>
+        <div><dt class="text-text-muted">Total débit</dt><dd class="font-medium text-text">{{ formaterMontant(resume.total_debit) }}</dd></div>
+        <div><dt class="text-text-muted">Total crédit</dt><dd class="font-medium text-text">{{ formaterMontant(resume.total_credit) }}</dd></div>
+        <div><dt class="text-text-muted">Solde final</dt><dd class="font-semibold text-text">{{ formaterMontant(resume.solde_final) }}</dd></div>
+      </dl>
+      <details v-if="resume.mouvements.length > 0" class="mt-3 text-sm">
+        <summary class="cursor-pointer text-primary">Voir les {{ resume.mouvements.length }} mouvement(s)</summary>
+        <table class="mt-2 w-full text-xs">
+          <thead class="text-left text-text-muted">
+            <tr><th class="py-1">Date</th><th>Pièce</th><th>Libellé</th><th class="text-right">Débit</th><th class="text-right">Crédit</th><th class="text-right">Solde</th></tr>
+          </thead>
+          <tbody class="divide-y divide-border">
+            <tr v-for="(m, i) in resume.mouvements" :key="i" class="text-text">
+              <td class="py-1">{{ m.date_ecriture }}</td>
+              <td>{{ m.numero ?? "—" }}</td>
+              <td>{{ m.libelle }}</td>
+              <td class="text-right">{{ Number(m.debit) > 0 ? formaterMontant(m.debit) : "" }}</td>
+              <td class="text-right">{{ Number(m.credit) > 0 ? formaterMontant(m.credit) : "" }}</td>
+              <td class="text-right">{{ formaterMontant(m.solde_cumule) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </details>
+      <p class="mt-2 text-xs text-text-muted">Solde en débit − crédit, sur les comptes de trésorerie de ce journal (écritures validées).</p>
+    </div>
 
     <BaseFormulaire
       v-if="!lectureSeule"
@@ -447,12 +655,12 @@ async function telechargerPiece(piece: NonNullable<typeof piecesJustificatives.v
             <label class="mb-1 block text-sm font-medium text-text">Journal</label>
             <select v-model="formulaire.journal_id" required :disabled="enEdition" class="w-full rounded-md border border-border px-3 py-2 text-text disabled:opacity-60">
               <option value="" disabled>— Choisir —</option>
-              <option v-for="j in journaux" :key="j.id" :value="j.id">{{ j.code }} — {{ j.libelle }}</option>
+              <option v-for="j in journauxSaisie" :key="j.id" :value="j.id">{{ j.code }} — {{ j.libelle }}</option>
             </select>
           </div>
           <div>
             <label class="mb-1 block text-sm font-medium text-text">Date</label>
-            <input v-model="formulaire.date_ecriture" type="date" required class="w-full rounded-md border border-border px-3 py-2 text-text" />
+            <input v-model="formulaire.date_ecriture" type="date" required :min="!enEdition ? moisChoisi?.date_debut : undefined" :max="!enEdition ? moisChoisi?.date_fin : undefined" class="w-full rounded-md border border-border px-3 py-2 text-text" />
           </div>
         </div>
 

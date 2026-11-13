@@ -23,7 +23,7 @@ from app.modules.comptabilite.models import PeriodiciteRecurrence, SensLigne, Ty
 class CompteCreation(BaseModel):
     numero: str = Field(min_length=1, max_length=20)
     libelle: str = Field(min_length=2, max_length=255)
-    classe: int = Field(ge=1, le=8)
+    classe: int = Field(ge=1, le=9)
     lettrable: bool = False
     est_collectif: bool = False
     # Sous-compte (hiérarchie parent/enfant, voir models.py) : optionnel,
@@ -393,4 +393,32 @@ class GenerationEcheancesResultat(BaseModel):
     ecritures_creees: list[EcritureLecture]
     ignorees: list[EcheanceIgnoreeLecture]
 
-    #Nouvelle modification
+
+class ANouveauxDemande(BaseModel):
+    """Corps optionnel de la génération des à-nouveaux : `regenerer` extourne
+    les à-nouveaux existants puis les refait (motif obligatoire, tracé)."""
+
+    regenerer: bool = False
+    motif: str | None = Field(default=None, max_length=255)
+
+
+class MouvementJournalTresorerie(BaseModel):
+    ecriture_id: uuid.UUID
+    date_ecriture: date
+    numero: str | None
+    libelle: str
+    compte_numero: str
+    debit: Decimal
+    credit: Decimal
+    solde_cumule: Decimal
+
+
+class ResumeJournalTresorerie(BaseModel):
+    journal_id: uuid.UUID
+    date_debut: date
+    date_fin: date
+    solde_initial: Decimal
+    total_debit: Decimal
+    total_credit: Decimal
+    solde_final: Decimal
+    mouvements: list[MouvementJournalTresorerie] = []

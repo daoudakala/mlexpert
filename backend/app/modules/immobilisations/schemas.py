@@ -79,6 +79,7 @@ class ImmobilisationLecture(BaseModel):
     compte_amortissement_id: uuid.UUID
     compte_dotation_id: uuid.UUID
     fournisseur_id: uuid.UUID | None
+    ligne_acquisition_id: uuid.UUID | None
     date_sortie: date | None
     prix_cession: Decimal | None
     valeur_nette_comptable_sortie: Decimal | None
@@ -122,3 +123,46 @@ class ReformeDemande(BaseModel):
     date_sortie: date
     journal_id: uuid.UUID
     compte_valeur_comptable_sortie_id: uuid.UUID
+
+class AcquisitionAConfirmer(BaseModel):
+    """Une ligne d'écriture validée qui débite un compte d'immobilisation
+    (21 à 27) et n'a pas encore de fiche — avec des propositions pour
+    pré-remplir la confirmation."""
+
+    ligne_ecriture_id: uuid.UUID
+    ecriture_id: uuid.UUID
+    date_acquisition: date
+    numero_ecriture: str | None
+    libelle: str
+    compte_id: uuid.UUID
+    compte_numero: str
+    compte_libelle: str
+    montant: Decimal
+    tiers_id: uuid.UUID | None
+    compte_amortissement_suggere_id: uuid.UUID | None
+    compte_dotation_suggere_id: uuid.UUID | None
+
+
+class ConfirmationAcquisition(BaseModel):
+    """Les informations que l'écriture ne porte pas. La date d'acquisition,
+    la valeur d'origine et le compte d'immobilisation viennent de la ligne
+    d'écriture elle-même."""
+
+    libelle: str = Field(min_length=2, max_length=255)
+    categorie: str | None = Field(default=None, max_length=100)
+    numero_inventaire: str | None = Field(default=None, max_length=50)
+    date_mise_en_service: date | None = None  # défaut : date d'acquisition
+    valeur_residuelle: Decimal = Field(default=Decimal("0"), ge=0)
+    duree_amortissement_annees: int = Field(gt=0, le=100)
+    methode_amortissement: MethodeAmortissement = MethodeAmortissement.LINEAIRE
+    taux_degressif: Decimal | None = Field(default=None, gt=0, le=100)
+    compte_amortissement_id: uuid.UUID
+    compte_dotation_id: uuid.UUID
+    fournisseur_id: uuid.UUID | None = None
+    generer_plan: bool = True
+
+
+class ConfirmationAcquisitionResultat(BaseModel):
+    immobilisation: ImmobilisationLecture
+    lignes_generees: int
+    avertissement: str | None = None

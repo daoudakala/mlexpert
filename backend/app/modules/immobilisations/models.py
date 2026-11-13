@@ -168,6 +168,18 @@ class Immobilisation(IdentifiantMixin, HorodatageMixin, EntrepriseMixin, Base):
         UUID(as_uuid=True), ForeignKey("tiers.id", ondelete="RESTRICT"), nullable=True, index=True
     )
 
+    # Ligne d'écriture d'acquisition (débit d'un compte 21-27) dont cette
+    # fiche est issue quand elle a été reprise automatiquement depuis la
+    # comptabilité (voir `ServiceImmobilisations.confirmer_acquisition`) ;
+    # nulle pour une fiche saisie à la main. Unique : une ligne ne donne
+    # jamais deux fiches.
+    ligne_acquisition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lignes_ecriture.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+
     # Renseignés uniquement à la cession/réforme (voir la note de tête de
     # fichier) — jamais à la création, jamais modifiés après coup.
     date_sortie: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -220,4 +232,19 @@ class LigneAmortissement(IdentifiantMixin, EntrepriseMixin, Base):
         UUID(as_uuid=True),
         ForeignKey("ecritures.id", ondelete="SET NULL"),
         nullable=True,
+    )
+
+class AcquisitionIgnoree(IdentifiantMixin, EntrepriseMixin, Base):
+    """Ligne d'écriture sur un compte 21-27 que le comptable a décidé de ne
+    PAS reprendre en immobilisation (ex. petit matériel passé en charge
+    d'équipement) : elle n'est plus proposée dans « Acquisitions à
+    confirmer »."""
+
+    __tablename__ = "acquisitions_ignorees"
+
+    ligne_ecriture_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lignes_ecriture.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
     )

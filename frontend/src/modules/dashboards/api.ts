@@ -8,8 +8,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 
 import { apiClient } from "@/core/api/client";
 import type {
+  BalanceDetaillee,
   Bilan,
   CompteResultatDetaille,
+  GrandLivreGeneral,
   CompteResultatSommaire,
   LigneBalance,
   LigneBalanceComparee,
@@ -268,6 +270,117 @@ export async function exporterEtatsFinanciers(
   const lien = window.document.createElement("a");
   lien.href = url;
   lien.download = `etats_financiers_${exerciceId}.xlsx`;
+  lien.click();
+  window.URL.revokeObjectURL(url);
+}
+// --- Balance générale à colonnes --------------------------------------------
+
+function parametresBalance(
+  dateDebut: string | null,
+  dateFin: string | null,
+  classe: string | null,
+): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (dateDebut) params.date_debut = dateDebut;
+  if (dateFin) params.date_fin = dateFin;
+  if (classe) params.classes = classe;
+  return params;
+}
+
+export function useBalanceDetaillee(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: Ref<string | null>,
+  dateDebut: Ref<string | null>,
+  dateFin: Ref<string | null>,
+  classe: Ref<string | null>,
+) {
+  return useQuery({
+    queryKey: ["balance-detaillee", entrepriseId, exerciceId, dateDebut, dateFin, classe],
+    queryFn: async () => {
+      const { data } = await apiClient.get<BalanceDetaillee>(
+        `${racine(entrepriseId)}/exercices/${exerciceId.value}/balance-detaillee`,
+        { params: parametresBalance(dateDebut.value, dateFin.value, classe.value) },
+      );
+      return data;
+    },
+    enabled: () => !!entrepriseId.value && !!exerciceId.value,
+    retry: false,
+  });
+}
+
+/** Télécharge la balance en Excel, avec les mêmes filtres que l'écran. */
+export async function exporterBalanceDetaillee(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: string,
+  dateDebut: string | null,
+  dateFin: string | null,
+  classe: string | null,
+): Promise<void> {
+  const reponse = await apiClient.get(
+    `${racine(entrepriseId)}/exercices/${exerciceId}/balance-detaillee/export`,
+    { params: parametresBalance(dateDebut, dateFin, classe), responseType: "blob" },
+  );
+  const url = window.URL.createObjectURL(new Blob([reponse.data]));
+  const lien = window.document.createElement("a");
+  lien.href = url;
+  lien.download = `balance_generale_${dateFin ?? exerciceId}.xlsx`;
+  lien.click();
+  window.URL.revokeObjectURL(url);
+}
+
+// --- Grand livre général -------------------------------------------------------
+
+export interface FiltresGrandLivre {
+  dateDebut: string | null;
+  dateFin: string | null;
+  compteDebut: string;
+  compteFin: string;
+  journalId: string | null;
+}
+
+function parametresGrandLivre(f: FiltresGrandLivre): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (f.dateDebut) params.date_debut = f.dateDebut;
+  if (f.dateFin) params.date_fin = f.dateFin;
+  if (f.compteDebut.trim()) params.compte_debut = f.compteDebut.trim();
+  if (f.compteFin.trim()) params.compte_fin = f.compteFin.trim();
+  if (f.journalId) params.journal_id = f.journalId;
+  return params;
+}
+
+export function useGrandLivreGeneral(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: Ref<string | null>,
+  filtres: Ref<FiltresGrandLivre>,
+) {
+  return useQuery({
+    queryKey: ["grand-livre-general", entrepriseId, exerciceId, filtres],
+    queryFn: async () => {
+      const { data } = await apiClient.get<GrandLivreGeneral>(
+        `${racine(entrepriseId)}/exercices/${exerciceId.value}/grand-livre-general`,
+        { params: parametresGrandLivre(filtres.value) },
+      );
+      return data;
+    },
+    enabled: () => !!entrepriseId.value && !!exerciceId.value,
+    retry: false,
+  });
+}
+
+/** Télécharge le grand livre en Excel, avec les mêmes filtres que l'écran. */
+export async function exporterGrandLivreGeneral(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: string,
+  filtres: FiltresGrandLivre,
+): Promise<void> {
+  const reponse = await apiClient.get(
+    `${racine(entrepriseId)}/exercices/${exerciceId}/grand-livre-general/export`,
+    { params: parametresGrandLivre(filtres), responseType: "blob" },
+  );
+  const url = window.URL.createObjectURL(new Blob([reponse.data]));
+  const lien = window.document.createElement("a");
+  lien.href = url;
+  lien.download = `grand_livre_${filtres.dateFin ?? exerciceId}.xlsx`;
   lien.click();
   window.URL.revokeObjectURL(url);
 }

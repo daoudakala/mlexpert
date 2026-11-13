@@ -59,9 +59,9 @@ class ServiceTiers:
             raise Conflit(f"Le tiers {code} existe déjà pour cette entreprise.")
 
         if compte_collectif_client_id is not None:
-            self._valider_compte_collectif(compte_collectif_client_id)
+            self._valider_compte_collectif(compte_collectif_client_id, "client")
         if compte_collectif_fournisseur_id is not None:
-            self._valider_compte_collectif(compte_collectif_fournisseur_id)
+            self._valider_compte_collectif(compte_collectif_fournisseur_id, "fournisseur")
 
         if nif and not confirmer_malgre_doublon:
             doublons = self.tiers.rechercher_par_nif(nif)
@@ -165,9 +165,9 @@ class ServiceTiers:
 
         tiers = self._obtenir_ou_lever(tiers_id)
         if compte_collectif_client_id is not None:
-            self._valider_compte_collectif(compte_collectif_client_id)
+            self._valider_compte_collectif(compte_collectif_client_id, "client")
         if compte_collectif_fournisseur_id is not None:
-            self._valider_compte_collectif(compte_collectif_fournisseur_id)
+            self._valider_compte_collectif(compte_collectif_fournisseur_id, "fournisseur")
 
         tiers.compte_collectif_client_id = compte_collectif_client_id
         tiers.compte_collectif_fournisseur_id = compte_collectif_fournisseur_id
@@ -243,11 +243,25 @@ class ServiceTiers:
             raise RessourceIntrouvable("Tiers introuvable.")
         return tiers
 
-    def _valider_compte_collectif(self, compte_id: uuid.UUID) -> None:
+    def _valider_compte_collectif(self, compte_id: uuid.UUID, role: str) -> None:
+        """Le compte de regroupement d'un tiers est un compte général de la
+        classe 4 : 41x pour un client (ex. 411), 40x pour un fournisseur
+        (ex. 401). Un compte de cette famille qui n'est pas encore marqué
+        « collectif » (cas d'un plan comptable importé sans ce drapeau) le
+        devient ici — un collectif est par nature lettrable, voir la
+        contrainte de `comptabilite/models.py`."""
         compte = self.comptes.obtenir(compte_id)
         if compte is None:
             raise RessourceIntrouvable("Compte collectif introuvable.")
-        if not compte.est_collectif:
-            raise ValidationMetier(f"Le compte {compte.numero} n'est pas un compte collectif.")
+        prefixe, nature = ("41", "client (41x, ex. 411)") if role == "client" else ("40", "fournisseur (40x, ex. 401)")
+        if not compte.numero.startswith(prefixe):
+            raise ValidationMetier(
+                f"Le compte {compte.numero} ne peut pas servir de compte {nature} : "
+                f"choisissez un compte de regroupement {prefixe}x."
+            )
         if not compte.actif:
             raise ValidationMetier(f"Le compte {compte.numero} est désactivé.")
+        if not compte.est_collectif:
+            compte.est_collectif = True
+            compte.lettrable = True
+            self.db.flush()

@@ -102,7 +102,7 @@ class TypeJournal(StrEnum):
 class Compte(IdentifiantMixin, HorodatageMixin, Base):
     __tablename__ = "comptes"
     __table_args__ = (
-        CheckConstraint("classe BETWEEN 1 AND 8", name="classe_valide"),
+        CheckConstraint("classe BETWEEN 1 AND 9", name="classe_valide"),
         CheckConstraint(
             "NOT est_collectif OR lettrable",
             name="collectif_implique_lettrable",
@@ -124,7 +124,7 @@ class Compte(IdentifiantMixin, HorodatageMixin, Base):
 
     numero: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     libelle: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Classe SYSCOHADA (1 à 8) : détermine la nature du compte (ressources
+    # Classe SYSCOHADA (1 à 9 ; la 9 = engagements hors bilan / analytique) : détermine la nature du compte (ressources
     # durables, actif immobilisé, stocks, tiers, trésorerie, charges,
     # produits, autres charges/produits). Le sens normal (débiteur ou
     # créditeur) n'est volontairement pas stocké : il se lit directement

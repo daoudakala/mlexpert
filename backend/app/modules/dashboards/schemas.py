@@ -266,3 +266,45 @@ class BalanceDetailleeLecture(BaseModel):
     totaux_gestion: TotauxBalanceLecture
     totaux_balance: TotauxBalanceLecture
     equilibree: bool
+
+
+# --- Grand livre général -----------------------------------------------------
+
+
+class LigneGrandLivreGeneralLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ligne_ecriture_id: uuid.UUID
+    ecriture_id: uuid.UUID
+    date_ecriture: date
+    code_journal: str
+    numero_piece: str | None
+    libelle: str
+    debit: Decimal
+    credit: Decimal
+    solde_progressif: Decimal
+    code_lettrage: str | None
+
+
+class CompteGrandLivreLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    compte_id: uuid.UUID
+    numero: str
+    libelle: str
+    solde_anterieur: Decimal
+    lignes: list[LigneGrandLivreGeneralLecture]
+    total_debit: Decimal
+    total_credit: Decimal
+    solde_final: Decimal
+
+
+class GrandLivreGeneralLecture(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    exercice_id: uuid.UUID
+    date_debut: date
+    date_fin: date
+    comptes: list[CompteGrandLivreLecture]
+    total_debit: Decimal
+    total_credit: Decimal

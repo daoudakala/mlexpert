@@ -211,3 +211,73 @@ export interface TableauBord {
   besoin_fonds_roulement: string;
   bilan_fonctionnel: BilanFonctionnel;
 }
+
+// --- Balance générale à colonnes (à-nouveaux / mouvements / solde) ---------
+
+export interface LigneBalanceDetaillee {
+  compte_id: string;
+  numero: string;
+  libelle: string;
+  classe: number;
+  a_nouveau_debit: string;
+  a_nouveau_credit: string;
+  mouvement_debit: string;
+  mouvement_credit: string;
+  solde_debit: string;
+  solde_credit: string;
+}
+
+export interface TotauxBalance {
+  a_nouveau_debit: string;
+  a_nouveau_credit: string;
+  mouvement_debit: string;
+  mouvement_credit: string;
+  solde_debit: string;
+  solde_credit: string;
+}
+
+export interface BalanceDetaillee {
+  exercice_id: string;
+  date_debut: string;
+  date_fin: string;
+  lignes: LigneBalanceDetaillee[];
+  totaux_bilan: TotauxBalance;
+  totaux_gestion: TotauxBalance;
+  totaux_balance: TotauxBalance;
+  equilibree: boolean;
+}
+
+// --- Grand livre général -----------------------------------------------------
+
+export interface LigneGrandLivreGeneral {
+  ligne_ecriture_id: string;
+  ecriture_id: string;
+  date_ecriture: string;
+  code_journal: string;
+  numero_piece: string | null;
+  libelle: string;
+  debit: string;
+  credit: string;
+  solde_progressif: string; // débit − crédit cumulé : positif = débiteur
+  code_lettrage: string | null;
+}
+
+export interface CompteGrandLivre {
+  compte_id: string;
+  numero: string;
+  libelle: string;
+  solde_anterieur: string;
+  lignes: LigneGrandLivreGeneral[];
+  total_debit: string;
+  total_credit: string;
+  solde_final: string;
+}
+
+export interface GrandLivreGeneral {
+  exercice_id: string;
+  date_debut: string;
+  date_fin: string;
+  comptes: CompteGrandLivre[];
+  total_debit: string;
+  total_credit: string;
+}

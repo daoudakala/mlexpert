@@ -19,7 +19,10 @@ from app.api.deps import ContexteEntreprise, exiger_permission
 from app.core.database import get_db
 from app.modules.comptabilite.schemas import EcritureLecture
 from app.modules.immobilisations.schemas import (
+    AcquisitionAConfirmer,
     CessionDemande,
+    ConfirmationAcquisition,
+    ConfirmationAcquisitionResultat,
     GenerationEcritureDemande,
     ImmobilisationCreation,
     ImmobilisationLecture,
@@ -30,7 +33,7 @@ from app.modules.immobilisations.schemas import (
 from app.modules.immobilisations.service import CessionDemande as CessionDemandeDonnees
 from app.modules.immobilisations.service import ImmobilisationCreation as ImmobilisationCreationDonnees
 from app.modules.immobilisations.service import ReformeDemande as ReformeDemandeDonnees
-from app.modules.immobilisations.service import ServiceImmobilisations
+from app.modules.immobilisations.service import ConfirmationAcquisitionDonnees, ServiceImmobilisations
 
 router = APIRouter(prefix="/immobilisations", tags=["Immobilisations"])
 
@@ -228,3 +231,61 @@ def reformer_immobilisation(
     )
     db.commit()
     return ImmobilisationLecture.model_validate(immobilisation)
+
+# --- Reprise automatique des acquisitions (comptes 21 à 27) --------------------
+
+
+@router.get(
+    "/entreprises/{entreprise_id}/acquisitions-a-confirmer",
+    response_model=list[AcquisitionAConfirmer],
+)
+def lister_acquisitions_a_confirmer(
+    entreprise_id: uuid.UUID,
+    contexte: ContexteEntreprise = Depends(exiger_permission("immobilisation.consulter")),
+    db: Session = Depends(get_db),
+) -> list[AcquisitionAConfirmer]:
+    """Lignes d'écriture validées débitant un compte 21-27 qui n'ont pas
+    encore de fiche d'immobilisation."""
+    service = ServiceImmobilisations(db, contexte.entreprise_id)
+    return [AcquisitionAConfirmer.model_validate(a, from_attributes=True) for a in service.lister_acquisitions_a_confirmer()]
+
+
+@router.post(
+    "/entreprises/{entreprise_id}/acquisitions-a-confirmer/{ligne_ecriture_id}/confirmer",
+    response_model=ConfirmationAcquisitionResultat,
+    status_code=status.HTTP_201_CREATED,
+)
+def confirmer_acquisition(
+    entreprise_id: uuid.UUID,
+    ligne_ecriture_id: uuid.UUID,
+    donnees: ConfirmationAcquisition,
+    contexte: ContexteEntreprise = Depends(exiger_permission("immobilisation.creer")),
+    db: Session = Depends(get_db),
+) -> ConfirmationAcquisitionResultat:
+    service = ServiceImmobilisations(db, contexte.entreprise_id)
+    resultat = service.confirmer_acquisition(
+        ligne_ecriture_id,
+        ConfirmationAcquisitionDonnees(**donnees.model_dump()),
+        auteur_id=contexte.utilisateur_id,
+    )
+    db.commit()
+    return ConfirmationAcquisitionResultat(
+        immobilisation=ImmobilisationLecture.model_validate(resultat.immobilisation),
+        lignes_generees=resultat.lignes_generees,
+        avertissement=resultat.avertissement,
+    )
+
+
+@router.post(
+    "/entreprises/{entreprise_id}/acquisitions-a-confirmer/{ligne_ecriture_id}/ignorer",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def ignorer_acquisition(
+    entreprise_id: uuid.UUID,
+    ligne_ecriture_id: uuid.UUID,
+    contexte: ContexteEntreprise = Depends(exiger_permission("immobilisation.creer")),
+    db: Session = Depends(get_db),
+) -> None:
+    service = ServiceImmobilisations(db, contexte.entreprise_id)
+    service.ignorer_acquisition(ligne_ecriture_id, auteur_id=contexte.utilisateur_id)
+    db.commit()

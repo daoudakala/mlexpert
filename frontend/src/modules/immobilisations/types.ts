@@ -48,6 +48,8 @@ export interface Immobilisation {
   compte_amortissement_id: string;
   compte_dotation_id: string;
   fournisseur_id: string | null;
+  // Ligne d'écriture d'acquisition d'où la fiche a été reprise (null si saisie à la main).
+  ligne_acquisition_id: string | null;
   date_sortie: string | null;
   prix_cession: string | null;
   valeur_nette_comptable_sortie: string | null;
@@ -86,4 +88,42 @@ export interface ReformeDemande {
   date_sortie: string;
   journal_id: string;
   compte_valeur_comptable_sortie_id: string;
+}
+
+// --- Reprise automatique des acquisitions (comptes 21 à 27) ------------------
+
+export interface AcquisitionAConfirmer {
+  ligne_ecriture_id: string;
+  ecriture_id: string;
+  date_acquisition: string;
+  numero_ecriture: string | null;
+  libelle: string;
+  compte_id: string;
+  compte_numero: string;
+  compte_libelle: string;
+  montant: string; // Decimal sérialisé en chaîne
+  tiers_id: string | null;
+  compte_amortissement_suggere_id: string | null;
+  compte_dotation_suggere_id: string | null;
+}
+
+export interface ConfirmationAcquisition {
+  libelle: string;
+  categorie?: string | null;
+  numero_inventaire?: string | null;
+  date_mise_en_service?: string | null;
+  valeur_residuelle?: number;
+  duree_amortissement_annees: number;
+  methode_amortissement: MethodeAmortissement;
+  taux_degressif?: number | null;
+  compte_amortissement_id: string;
+  compte_dotation_id: string;
+  fournisseur_id?: string | null;
+  generer_plan: boolean;
+}
+
+export interface ConfirmationAcquisitionResultat {
+  immobilisation: Immobilisation;
+  lignes_generees: number;
+  avertissement: string | null;
 }

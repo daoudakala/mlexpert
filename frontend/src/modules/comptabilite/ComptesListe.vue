@@ -1,28 +1,28 @@
 <script setup lang="ts">
 /**
  * Plan comptable de l'entreprise : référentiel global (entreprise_id nul,
- * non désactivable ici) + extensions propres à l'entreprise (créées et
- * désactivables depuis cette page). Pas de route de modification côté
- * backend (router.py n'a que creer_extension_compte/desactiver_extension_
- * compte) — même limitation assumée que pour les comptes bancaires.
+ * non modifiable ici) + comptes propres à l'entreprise (créés, désactivés
+ * ou supprimés depuis cette page).
  *
- * Deux façons d'alimenter le plan comptable : compte par compte (formulaire
- * "Nouveau compte", avec un compte parent optionnel pour créer un
- * sous-compte), ou en masse par import d'un fichier CSV/Excel à deux
- * colonnes (numéro, libellé) — le parent de chaque ligne importée est
- * déduit automatiquement du numéro (voir la note de
- * `ServiceComptabilite.importer_comptes` côté backend), jamais saisi.
+ * - Neuf classes SYSCOHADA (1 à 9) : la classe 9 (engagements hors bilan /
+ *   analytique) est consultable et saisissable, mais n'entre pas dans les
+ *   totaux de la balance ni du tableau de bord.
+ * - Vue par classe (pastilles) + recherche texte sur numéro OU libellé.
+ * - Comptes divisionnaires : bouton « + Sous-compte » sur chaque ligne
+ *   (formulaire prérempli : parent, classe, début de numéro) ; la
+ *   hiérarchie s'affiche en retrait sous le compte parent.
+ * - Suppression : seulement pour un compte propre à l'entreprise et jamais
+ *   utilisé ; le backend refuse sinon en donnant la raison (écritures,
+ *   sous-comptes, tiers...) — la désactivation reste alors possible.
+ * - Classe 2 : les comptes d'immobilisations (21 à 27) portent un repère
+ *   « Immobilisable » ; la création automatique de la fiche immobilisation
+ *   à la saisie d'une écriture viendra avec le module Immobilisations.
+ * - Import en masse CSV/Excel (numéro, libellé) : classe et parent déduits
+ *   du numéro (voir `ServiceComptabilite.importer_comptes`).
  *
- * Le plan comptable d'un cabinet peut compter plusieurs centaines de
- * comptes une fois le référentiel importé : le tableau est donc paginé
- * (page suivante/précédente, comme `JournalActivitePage.vue` — pas de
- * numérotation de pages, le backend ne renvoie pas de total) et filtrable
- * par recherche texte sur le numéro OU le libellé, et par classe SYSCOHADA
- * (1 à 8). Ce filtrage porte sur `tousLesComptes` séparément de
- * l'affichage : un compte créé comme parent peut très bien ne pas
- * apparaître sur la page actuellement affichée, mais doit quand même
- * pouvoir être choisi dans le formulaire et être résolu par son numéro
- * dans la colonne "Compte parent".
+ * Le tableau est paginé (le backend ne renvoie pas de total) ; la liste
+ * complète `tousLesComptes` sert à résoudre les parents et à calculer le
+ * retrait hiérarchique, indépendamment de la page affichée.
  */
 import { computed, reactive, ref, watch } from "vue";
 
@@ -37,29 +37,50 @@ import type { Compte, CompteImportResultat } from "./types";
 const { contexteActif, aPermission } = useAuth();
 const entrepriseId = computed(() => contexteActif.value?.entreprise.id);
 
-// Liste complète (jusqu'à 1000 comptes, sans recherche ni pagination) :
-// sert uniquement à résoudre un compte parent par son id (colonne "Compte
-// parent", <select> du formulaire), jamais affichée telle quelle.
-const { data: tousLesComptes } = useComptesEntreprise(entrepriseId);
+const CLASSES: { numero: number; libelle: string }[] = [
+  { numero: 1, libelle: "Ressources durables" },
+  { numero: 2, libelle: "Actif immobilisé" },
+  { numero: 3, libelle: "Stocks" },
+  { numero: 4, libelle: "Tiers" },
+  { numero: 5, libelle: "Trésorerie" },
+  { numero: 6, libelle: "Charges" },
+  { numero: 7, libelle: "Produits" },
+  { numero: 8, libelle: "Autres charges et produits" },
+  { numero: 9, libelle: "Hors bilan / analytique" },
+];
+
+// Liste complète : résolution des parents + retrait hiérarchique.
+const { data: tousLesComptes } = useComptesEntreprise(
+  entrepriseId,
+  computed(() => ({ limite: 5000 })),
+);
 const comptesParId = computed(() => {
   const table = new Map<string, Compte>();
   for (const c of tousLesComptes.value ?? []) table.set(c.id, c);
   return table;
 });
 
-// Liste affichée dans le tableau : paginée + recherche texte (numéro ou
-// libellé) + classe, requête distincte de `tousLesComptes` ci-dessus.
-const TAILLE_PAGE = 50;
+function profondeur(compte: Compte): number {
+  let niveau = 0;
+  let courant: Compte | undefined = compte;
+  while (courant?.compte_parent_id && niveau < 10) {
+    courant = comptesParId.value.get(courant.compte_parent_id);
+    if (courant) niveau += 1;
+  }
+  return niveau;
+}
+
+function estImmobilisable(compte: Compte): boolean {
+  return compte.classe === 2 && /^2[1-7]/.test(compte.numero);
+}
+
+// Liste affichée : paginée + recherche + classe.
+const TAILLE_PAGE = 100;
 const filtres = reactive<FiltresComptes>({ recherche: "", classe: null, limite: TAILLE_PAGE, decalage: 0 });
 const rechercheSaisie = ref("");
 const { data: comptes, isLoading } = useComptesEntreprise(entrepriseId, computed(() => filtres));
-const { creer, desactiver, importer } = useMutationsComptes(entrepriseId);
+const { creer, desactiver, supprimer, importer } = useMutationsComptes(entrepriseId);
 
-// Recherche interactive (au fil de la saisie), avec un petit délai pour ne
-// pas déclencher une requête à chaque frappe — seulement une fois que la
-// personne a marqué une pause de 300 ms. `watch` plutôt qu'un gestionnaire
-// @input : se redéclenche aussi si `rechercheSaisie` est vidé autrement
-// (ex. un bouton "Effacer" ajouté plus tard).
 let delaiRecherche: ReturnType<typeof setTimeout> | undefined;
 watch(rechercheSaisie, (valeur) => {
   clearTimeout(delaiRecherche);
@@ -69,11 +90,8 @@ watch(rechercheSaisie, (valeur) => {
   }, 300);
 });
 
-// Le filtre par classe s'applique immédiatement (un <select>, pas de
-// saisie à tempériser).
-function filtrerParClasse(e: Event): void {
-  const valeur = (e.target as HTMLSelectElement).value;
-  filtres.classe = valeur ? Number(valeur) : null;
+function choisirClasse(numero: number | null): void {
+  filtres.classe = numero;
   filtres.decalage = 0;
 }
 
@@ -90,12 +108,13 @@ const colonnes: ColonneTable<Compte>[] = [
   { cle: "numero", libelle: "Numéro" },
   { cle: "libelle", libelle: "Libellé" },
   { cle: "classe", libelle: "Classe" },
-  { cle: "compte_parent_id", libelle: "Compte parent" },
   { cle: "lettrable", libelle: "Lettrable" },
   { cle: "est_collectif", libelle: "Collectif" },
   { cle: "entreprise_id", libelle: "Origine" },
-  { cle: "actif", libelle: "Statut" },
+  { cle: "actif", libelle: "Statut / actions" },
 ];
+
+// --- Création (compte ou sous-compte) -------------------------------------
 
 const formulaireOuvert = ref(false);
 const formulaire = reactive({
@@ -108,24 +127,60 @@ const formulaire = reactive({
 });
 const erreur = ref<string | null>(null);
 
-// Candidats au rôle de parent : seulement les comptes actifs de la même
-// classe (voir la vérification équivalente côté service) — réduit la
-// liste déroulante aux choix qui ont une chance d'être acceptés.
 const parentsEligibles = computed(() =>
   (tousLesComptes.value ?? []).filter((c) => c.actif && c.classe === formulaire.classe),
 );
+
+function radical(numero: string): string {
+  return numero.replace(/0+$/, "") || numero;
+}
+
+// Choisir un parent aligne la classe et propose le début du numéro.
+watch(
+  () => formulaire.compte_parent_id,
+  (id) => {
+    const parent = id ? comptesParId.value.get(id) : undefined;
+    if (!parent) return;
+    formulaire.classe = parent.classe;
+    if (!formulaire.numero.startsWith(radical(parent.numero))) {
+      formulaire.numero = radical(parent.numero);
+    }
+  },
+);
+
+function reinitialiserFormulaire(): void {
+  formulaire.numero = "";
+  formulaire.libelle = "";
+  formulaire.classe = filtres.classe ?? 4;
+  formulaire.lettrable = false;
+  formulaire.est_collectif = false;
+  formulaire.compte_parent_id = "";
+}
+
+function ouvrirNouveau(): void {
+  reinitialiserFormulaire();
+  erreur.value = null;
+  formulaireOuvert.value = true;
+  importOuvert.value = false;
+}
+
+function ouvrirSousCompte(parent: Compte): void {
+  reinitialiserFormulaire();
+  erreur.value = null;
+  formulaire.classe = parent.classe;
+  formulaire.compte_parent_id = parent.id;
+  formulaire.numero = radical(parent.numero);
+  formulaire.lettrable = parent.lettrable;
+  formulaireOuvert.value = true;
+  importOuvert.value = false;
+}
 
 async function soumettre(): Promise<void> {
   erreur.value = null;
   try {
     await creer.mutateAsync({ ...formulaire, compte_parent_id: formulaire.compte_parent_id || null });
     formulaireOuvert.value = false;
-    formulaire.numero = "";
-    formulaire.libelle = "";
-    formulaire.classe = 4;
-    formulaire.lettrable = false;
-    formulaire.est_collectif = false;
-    formulaire.compte_parent_id = "";
+    reinitialiserFormulaire();
   } catch (e) {
     erreur.value = messageErreur(e);
   }
@@ -154,22 +209,47 @@ async function soumettreImport(): Promise<void> {
   }
 }
 
-// `compteADesactiver` garde la ligne ciblée, `confirmationOuverte` ne
-// pilote que l'affichage du dialogue : ConfirmDialog ferme le dialogue
-// (émet update:ouvert=false) AVANT d'émettre "confirmer" — avec un seul
-// ref portant les deux rôles, la cible serait effacée avant que le
-// gestionnaire de confirmation ne la lise.
+// --- Désactivation / suppression ---------------------------------------
+// `compteCible` garde la ligne ciblée, les booléens ne pilotent que
+// l'affichage : ConfirmDialog ferme le dialogue AVANT d'émettre "confirmer".
+
 const compteADesactiver = ref<Compte | null>(null);
-const confirmationOuverte = ref(false);
+const desactivationOuverte = ref(false);
+const compteASupprimer = ref<Compte | null>(null);
+const suppressionOuverte = ref(false);
+const erreurAction = ref<string | null>(null);
+
 function demanderDesactivation(compte: Compte): void {
   compteADesactiver.value = compte;
-  confirmationOuverte.value = true;
+  desactivationOuverte.value = true;
 }
 
 async function confirmerDesactivation(): Promise<void> {
   if (!compteADesactiver.value) return;
-  await desactiver.mutateAsync(compteADesactiver.value.id);
+  erreurAction.value = null;
+  try {
+    await desactiver.mutateAsync(compteADesactiver.value.id);
+  } catch (e) {
+    erreurAction.value = messageErreur(e);
+  }
   compteADesactiver.value = null;
+}
+
+function demanderSuppression(compte: Compte): void {
+  compteASupprimer.value = compte;
+  suppressionOuverte.value = true;
+}
+
+async function confirmerSuppression(): Promise<void> {
+  if (!compteASupprimer.value) return;
+  erreurAction.value = null;
+  try {
+    await supprimer.mutateAsync(compteASupprimer.value.id);
+  } catch (e) {
+    // Ex. « Le compte 601100 est utilisé dans 12 ligne(s) d'écriture… »
+    erreurAction.value = messageErreur(e);
+  }
+  compteASupprimer.value = null;
 }
 </script>
 
@@ -190,7 +270,7 @@ async function confirmerDesactivation(): Promise<void> {
           v-if="aPermission('compte.creer')"
           type="button"
           class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary-hover"
-          @click="formulaireOuvert = !formulaireOuvert; importOuvert = false"
+          @click="formulaireOuvert ? (formulaireOuvert = false) : ouvrirNouveau()"
         >
           Nouveau compte
         </button>
@@ -212,7 +292,7 @@ async function confirmerDesactivation(): Promise<void> {
           @change="choisirFichier"
         />
         <p class="mt-1 text-xs text-text-muted">
-          Deux colonnes par ligne : numéro de compte, puis libellé. La classe est déduite du
+          Deux colonnes par ligne : numéro de compte, puis libellé. La classe (1 à 9) est déduite du
           premier chiffre du numéro, et le compte parent (sous-compte) est déduit automatiquement
           du numéro lui-même — pas besoin de colonne supplémentaire.
         </p>
@@ -248,6 +328,9 @@ async function confirmerDesactivation(): Promise<void> {
       class="space-y-4 rounded-lg border border-border bg-surface p-6"
       @submit.prevent="soumettre"
     >
+      <h2 class="text-sm font-semibold text-text">
+        {{ formulaire.compte_parent_id ? "Nouveau sous-compte (compte divisionnaire)" : "Nouveau compte" }}
+      </h2>
       <div class="grid grid-cols-4 gap-4">
         <div>
           <label class="mb-1 block text-sm font-medium text-text">Numéro</label>
@@ -259,7 +342,9 @@ async function confirmerDesactivation(): Promise<void> {
         </div>
         <div>
           <label class="mb-1 block text-sm font-medium text-text">Classe</label>
-          <input v-model.number="formulaire.classe" type="number" min="1" max="8" required class="w-full rounded-md border border-border px-3 py-2 text-text" />
+          <select v-model.number="formulaire.classe" required class="w-full rounded-md border border-border px-3 py-2 text-text">
+            <option v-for="c in CLASSES" :key="c.numero" :value="c.numero">{{ c.numero }} — {{ c.libelle }}</option>
+          </select>
         </div>
       </div>
       <div>
@@ -270,7 +355,7 @@ async function confirmerDesactivation(): Promise<void> {
         </select>
         <p class="mt-1 text-xs text-text-muted">
           Seuls les comptes actifs de la même classe sont proposés ; le numéro du sous-compte doit
-          commencer par celui du parent choisi.
+          commencer par celui du parent choisi (ex. 411 → 4111001).
         </p>
       </div>
       <div class="flex gap-6 text-sm text-text">
@@ -294,35 +379,70 @@ async function confirmerDesactivation(): Promise<void> {
       </div>
     </form>
 
-    <div class="flex items-center gap-2">
-      <input
-        v-model="rechercheSaisie"
-        type="search"
-        placeholder="Rechercher par numéro ou libellé…"
-        class="w-full max-w-sm rounded-md border border-border px-3 py-2 text-sm text-text"
-      />
-      <select
-        :value="filtres.classe ?? ''"
-        class="rounded-md border border-border px-3 py-2 text-sm text-text"
-        @change="filtrerParClasse"
+    <!-- Vue par classe -->
+    <div class="flex flex-wrap gap-2">
+      <button
+        type="button"
+        class="rounded-full border px-3 py-1 text-xs font-medium"
+        :class="filtres.classe === null ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-text hover:bg-surface-muted'"
+        @click="choisirClasse(null)"
       >
-        <option value="">Toutes les classes</option>
-        <option v-for="n in 8" :key="n" :value="n">Classe {{ n }}</option>
-      </select>
+        Toutes
+      </button>
+      <button
+        v-for="c in CLASSES"
+        :key="c.numero"
+        type="button"
+        class="rounded-full border px-3 py-1 text-xs font-medium"
+        :class="filtres.classe === c.numero ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-text hover:bg-surface-muted'"
+        :title="c.libelle"
+        @click="choisirClasse(c.numero)"
+      >
+        {{ c.numero }} · {{ c.libelle }}
+      </button>
     </div>
 
+    <input
+      v-model="rechercheSaisie"
+      type="search"
+      placeholder="Rechercher par numéro ou libellé…"
+      class="w-full max-w-sm rounded-md border border-border px-3 py-2 text-sm text-text"
+    />
+
+    <p v-if="filtres.classe === 9" class="rounded-md border border-border bg-surface-muted px-3 py-2 text-xs text-text-muted">
+      La classe 9 (engagements hors bilan, comptabilité analytique) n'entre pas dans les totaux de la
+      balance ni du tableau de bord.
+    </p>
+    <p v-if="erreurAction" class="rounded-md border border-danger px-3 py-2 text-sm text-danger">
+      {{ erreurAction }}
+    </p>
+
     <BaseDataTable :colonnes="colonnes" :lignes="comptes ?? []" :chargement="isLoading" message-vide="Aucun compte.">
+      <template #cell-numero="{ ligne }">
+        <span class="font-mono" :style="{ paddingLeft: `${profondeur(ligne) * 16}px` }">
+          <span v-if="profondeur(ligne) > 0" class="text-text-muted">└ </span>{{ ligne.numero }}
+        </span>
+      </template>
+      <template #cell-libelle="{ ligne }">
+        <span>{{ ligne.libelle }}</span>
+        <StatutBadge v-if="estImmobilisable(ligne)" class="ml-2" libelle="Immobilisable" tonalite="info" />
+      </template>
       <template #cell-lettrable="{ valeur }">{{ valeur ? "Oui" : "Non" }}</template>
       <template #cell-est_collectif="{ valeur }">{{ valeur ? "Oui" : "Non" }}</template>
-      <template #cell-compte_parent_id="{ valeur }">
-        {{ valeur ? comptesParId.get(valeur as string)?.numero ?? "—" : "—" }}
-      </template>
       <template #cell-entreprise_id="{ valeur }">
-        <StatutBadge :libelle="valeur ? 'Extension' : 'Référentiel global'" tonalite="info" />
+        <StatutBadge :libelle="valeur ? 'Propre à l\'entreprise' : 'Référentiel global'" tonalite="info" />
       </template>
       <template #cell-actif="{ ligne }">
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <StatutBadge :libelle="ligne.actif ? 'Actif' : 'Désactivé'" :tonalite="ligne.actif ? 'succes' : 'neutre'" />
+          <button
+            v-if="ligne.actif && aPermission('compte.creer')"
+            type="button"
+            class="text-xs text-primary hover:underline"
+            @click="ouvrirSousCompte(ligne)"
+          >
+            + Sous-compte
+          </button>
           <button
             v-if="ligne.actif && ligne.entreprise_id && aPermission('compte.archiver')"
             type="button"
@@ -330,6 +450,14 @@ async function confirmerDesactivation(): Promise<void> {
             @click="demanderDesactivation(ligne)"
           >
             Désactiver
+          </button>
+          <button
+            v-if="ligne.entreprise_id && aPermission('compte.archiver')"
+            type="button"
+            class="text-xs text-danger hover:underline"
+            @click="demanderSuppression(ligne)"
+          >
+            Supprimer
           </button>
         </div>
       </template>
@@ -355,12 +483,20 @@ async function confirmerDesactivation(): Promise<void> {
     </div>
 
     <ConfirmDialog
-      v-model:ouvert="confirmationOuverte"
+      v-model:ouvert="desactivationOuverte"
       titre="Désactiver ce compte ?"
-      :message="`Le compte ${compteADesactiver?.numero} n'apparaîtra plus dans les listes actives.`"
+      :message="`Le compte ${compteADesactiver?.numero} n'apparaîtra plus dans les listes actives ; son historique est conservé.`"
       libelle-confirmer="Désactiver"
       dangereux
       @confirmer="confirmerDesactivation"
+    />
+    <ConfirmDialog
+      v-model:ouvert="suppressionOuverte"
+      titre="Supprimer ce compte ?"
+      :message="`Le compte ${compteASupprimer?.numero} sera supprimé définitivement. Impossible s'il est déjà utilisé (écritures, sous-comptes, tiers) : désactivez-le alors.`"
+      libelle-confirmer="Supprimer"
+      dangereux
+      @confirmer="confirmerSuppression"
     />
   </div>
 </template>

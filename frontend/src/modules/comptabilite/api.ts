@@ -27,6 +27,8 @@ import type {
   ModeleEcritureAvecLignes,
   ModeleEcritureCreation,
   ModeleEcritureMiseAJour,
+  PeriodeMois,
+  ResumeJournalTresorerie,
 } from "./types";
 
 /** Les comptes éligibles comme compte collectif d'un tiers (compte lettrable
@@ -129,6 +131,16 @@ export function useMutationsComptes(entrepriseId: Ref<string | null | undefined>
     onSuccess: invalider,
   });
 
+  // Suppression définitive d'une extension jamais utilisée (le backend
+  // refuse, avec la raison, si le compte porte des écritures, des
+  // sous-comptes, des tiers...).
+  const supprimer = useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.post(`${racineCompta(entrepriseId)}/comptes/${id}/supprimer`);
+    },
+    onSuccess: invalider,
+  });
+
   // Import en masse (CSV/Excel, voir ComptesListe.vue) : upload multipart,
   // comme le dépôt de document (`documents/api.ts`) — axios fixe lui-même
   // le Content-Type multipart/form-data à partir du FormData.
@@ -145,7 +157,66 @@ export function useMutationsComptes(entrepriseId: Ref<string | null | undefined>
     onSuccess: invalider,
   });
 
-  return { creer, desactiver, importer };
+  return { creer, desactiver, supprimer, importer };
+}
+
+// --- Mois de travail (périodes de l'exercice) -------------------------------
+
+export function usePeriodesExercice(
+  entrepriseId: Ref<string | null | undefined>,
+  exerciceId: Ref<string | null | undefined>,
+) {
+  return useQuery({
+    queryKey: computed(() => ["periodes-exercice", entrepriseId.value, exerciceId.value]),
+    queryFn: async () => {
+      const { data } = await apiClient.get<PeriodeMois[]>(
+        `/entreprises/${entrepriseId.value}/exercices/${exerciceId.value}/periodes`,
+      );
+      return data;
+    },
+    enabled: () => !!entrepriseId.value && !!exerciceId.value,
+  });
+}
+
+/** Crée les mois manquants de l'exercice (idempotent). */
+export function useMutationGenererMois(entrepriseId: Ref<string | null | undefined>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (exerciceId: string) => {
+      const { data } = await apiClient.post<PeriodeMois[]>(
+        `/entreprises/${entrepriseId.value}/exercices/${exerciceId}/periodes/generer-mensuelles`,
+      );
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["periodes-exercice"] }),
+  });
+}
+
+/** Solde initial / débits / crédits / solde final d'un journal de caisse ou
+ * de banque sur un mois — voir GET .../journaux/{id}/resume. */
+export function useResumeJournal(
+  entrepriseId: Ref<string | null | undefined>,
+  journalId: Ref<string | null | undefined>,
+  dateDebut: Ref<string | null | undefined>,
+  dateFin: Ref<string | null | undefined>,
+) {
+  return useQuery({
+    queryKey: computed(() => [
+      "resume-journal",
+      entrepriseId.value,
+      journalId.value,
+      dateDebut.value,
+      dateFin.value,
+    ]),
+    queryFn: async () => {
+      const { data } = await apiClient.get<ResumeJournalTresorerie>(
+        `${racineCompta(entrepriseId)}/journaux/${journalId.value}/resume`,
+        { params: { date_debut: dateDebut.value, date_fin: dateFin.value } },
+      );
+      return data;
+    },
+    enabled: () => !!entrepriseId.value && !!journalId.value && !!dateDebut.value && !!dateFin.value,
+  });
 }
 
 // --- À-nouveaux ------------------------------------------------------------
@@ -162,6 +233,25 @@ export function useMutationGenererANouveaux(entrepriseId: Ref<string | null | un
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ecritures"] });
       queryClient.invalidateQueries({ queryKey: ["journaux"] });
+    },
+  });
+}
+
+/** Régénération TRACÉE des à-nouveaux : extourne les à-nouveaux existants puis
+ * les refait. Le motif est obligatoire (5 caractères minimum). */
+export function useMutationRegenererANouveaux(entrepriseId: Ref<string | null | undefined>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ exerciceId, motif }: { exerciceId: string; motif: string }) => {
+      const { data } = await apiClient.post<EcritureLecture>(
+        `${racineCompta(entrepriseId)}/exercices/${exerciceId}/a-nouveaux`,
+        { regenerer: true, motif },
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ecritures"] });
+      queryClient.invalidateQueries({ queryKey: ["resume-journal"] });
     },
   });
 }
@@ -460,7 +550,11 @@ export function useExournantes(
 
 export function useMutationsEcritures(entrepriseId: Ref<string | null | undefined>) {
   const queryClient = useQueryClient();
-  const invalider = () => queryClient.invalidateQueries({ queryKey: ["ecritures"] });
+  const invalider = () => {
+    queryClient.invalidateQueries({ queryKey: ["ecritures"] });
+    // Le récapitulatif caisse/banque dépend des écritures validées.
+    queryClient.invalidateQueries({ queryKey: ["resume-journal"] });
+  };
   // Clé partielle volontaire, même raisonnement que tiers/api.ts et
   // tresorerie/api.ts : le matching par préfixe de invalidateQueries
   // suffit, pas besoin de reconstruire la clé exacte.

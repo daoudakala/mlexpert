@@ -22,7 +22,7 @@ export interface Compte {
   cree_le: string;
 }
 
-export type TypeJournal = "achats" | "ventes" | "banque" | "caisse" | "operations_diverses";
+export type TypeJournal = "achats" | "ventes" | "banque" | "caisse" | "operations_diverses" | "a_nouveaux";
 
 export interface Journal {
   id: string;
@@ -204,4 +204,39 @@ export interface AppliquerModeleDonnees {
   libelle?: string | null;
   reference_piece?: string | null;
   lignes: MontantLigneModele[];
+}
+// --- Mois de travail (périodes d'un exercice) -------------------------------
+
+export interface PeriodeMois {
+  id: string;
+  exercice_id: string;
+  libelle: string | null;
+  date_debut: string;
+  date_fin: string;
+  statut: "ouverte" | "cloturee";
+}
+
+// --- Récapitulatif d'un journal de caisse / banque --------------------------
+// Montants Decimal sérialisés en chaîne ; solde = débit − crédit.
+
+export interface MouvementJournalTresorerie {
+  ecriture_id: string;
+  date_ecriture: string;
+  numero: string | null;
+  libelle: string;
+  compte_numero: string;
+  debit: string;
+  credit: string;
+  solde_cumule: string;
+}
+
+export interface ResumeJournalTresorerie {
+  journal_id: string;
+  date_debut: string;
+  date_fin: string;
+  solde_initial: string;
+  total_debit: string;
+  total_credit: string;
+  solde_final: string;
+  mouvements: MouvementJournalTresorerie[];
 }

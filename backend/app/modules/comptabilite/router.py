@@ -17,8 +17,9 @@ la désactivation, `valider` pour la validation d'une écriture et
 """
 
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -29,6 +30,7 @@ from app.api.deps import (
 )
 from app.core.database import get_db
 from app.modules.comptabilite.schemas import (
+    ANouveauxDemande,
     AppliquerModeleDonnees,
     CompteCreation,
     CompteImportResultat,
@@ -57,6 +59,7 @@ from app.modules.comptabilite.schemas import (
     ModeleEcritureCreation,
     ModeleEcritureLecture,
     ModeleEcritureMiseAJour,
+    ResumeJournalTresorerie,
 )
 from app.modules.comptabilite.service import (
     LigneEcritureRecurrenteSaisie,
@@ -239,6 +242,24 @@ def desactiver_extension_compte(
     db.commit()
 
 
+@router.post(
+    "/entreprises/{entreprise_id}/comptes/{compte_id}/supprimer",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def supprimer_extension_compte(
+    entreprise_id: uuid.UUID,
+    compte_id: uuid.UUID,
+    contexte: ContexteEntreprise = Depends(exiger_permission("compte.archiver")),
+    db: Session = Depends(get_db),
+) -> None:
+    """Suppression d'une extension jamais utilisée ; sinon 422 avec la
+    raison (écritures, sous-comptes, tiers...). Même permission que la
+    désactivation (`compte.archiver`)."""
+    service = ServiceComptabilite(db, contexte.entreprise_id)
+    service.supprimer_extension_compte(compte_id, auteur_id=contexte.utilisateur_id)
+    db.commit()
+
+
 # --- Journaux ------------------------------------------------------------------
 
 
@@ -293,6 +314,26 @@ def lire_journal(
 ) -> JournalLecture:
     service = ServiceComptabilite(db, contexte.entreprise_id)
     return JournalLecture.model_validate(service.obtenir_journal(journal_id))
+
+
+@router.get(
+    "/entreprises/{entreprise_id}/journaux/{journal_id}/resume",
+    response_model=ResumeJournalTresorerie,
+)
+def resume_journal_tresorerie(
+    entreprise_id: uuid.UUID,
+    journal_id: uuid.UUID,
+    date_debut: date,
+    date_fin: date,
+    contexte: ContexteEntreprise = Depends(exiger_permission("journal.consulter")),
+    db: Session = Depends(get_db),
+) -> ResumeJournalTresorerie:
+    """Solde initial, total débit/crédit et solde final d'un journal de
+    caisse ou de banque sur une période (un mois de travail)."""
+    service = ServiceComptabilite(db, contexte.entreprise_id)
+    return ResumeJournalTresorerie.model_validate(
+        service.resume_journal_tresorerie(journal_id, date_debut=date_debut, date_fin=date_fin)
+    )
 
 
 @router.post(
@@ -772,11 +813,18 @@ def valider_ecriture(
 def generer_a_nouveaux(
     entreprise_id: uuid.UUID,
     exercice_id: uuid.UUID,
+    donnees: ANouveauxDemande | None = Body(default=None),
     contexte: ContexteEntreprise = Depends(exiger_permission("ecriture.creer")),
     db: Session = Depends(get_db),
 ) -> EcritureLecture:
     service = ServiceComptabilite(db, contexte.entreprise_id)
-    ecriture = service.generer_a_nouveaux(exercice_id, auteur_id=contexte.utilisateur_id)
+    donnees = donnees or ANouveauxDemande()
+    ecriture = service.generer_a_nouveaux(
+        exercice_id,
+        auteur_id=contexte.utilisateur_id,
+        regenerer=donnees.regenerer,
+        motif=donnees.motif,
+    )
     db.commit()
     return EcritureLecture.model_validate(ecriture)
 

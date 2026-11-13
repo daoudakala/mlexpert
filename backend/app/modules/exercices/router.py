@@ -111,6 +111,23 @@ def creer_periode(
     return PeriodeLecture.model_validate(periode)
 
 
+@router.post(
+    "/{exercice_id}/periodes/generer-mensuelles",
+    response_model=list[PeriodeLecture],
+    status_code=status.HTTP_201_CREATED,
+)
+def generer_periodes_mensuelles(
+    exercice_id: uuid.UUID,
+    contexte: ContexteEntreprise = Depends(exiger_permission("periode.creer")),
+    db: Session = Depends(get_db),
+) -> list[PeriodeLecture]:
+    """Crée les mois de travail manquants de l'exercice (idempotent)."""
+    service = ServiceExercices(db, contexte.entreprise_id)
+    creees = service.generer_periodes_mensuelles(exercice_id, auteur_id=contexte.utilisateur_id)
+    db.commit()
+    return [PeriodeLecture.model_validate(p) for p in creees]
+
+
 @router.get("/{exercice_id}/periodes", response_model=list[PeriodeLecture])
 def lister_periodes(
     exercice_id: uuid.UUID,
